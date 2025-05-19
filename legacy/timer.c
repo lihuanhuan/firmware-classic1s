@@ -123,6 +123,10 @@ void timer_init(void) {
   systick_counter_enable();
 }
 
+#ifdef APPVER
+extern void xPortSysTickHandler(void);
+#endif
+
 void sys_tick_handler(void) {
   int i;
   system_millis++;
@@ -136,6 +140,10 @@ void sys_tick_handler(void) {
       }
     }
   }
+
+#ifdef APPVER
+  xPortSysTickHandler();
+#endif
 }
 
 void timer_sleep_start_reset(void) { system_millis_sleep_start = 0; }

@@ -7,17 +7,11 @@
 #include "common.h"
 #include "config.h"
 #include "gettext.h"
-#include "rng.h"
-#include "secbool.h"
-
 #include "menu_core.h"
-
-#include "layout_ui.h"
-
-typedef enum {
-  PIN_OPERATION_VERIFY,
-  PIN_OPERATION_SET,
-} pin_operation_t;
+#include "rng.h"
+#include "se_chip.h"
+#include "secbool.h"
+#include "usart.h"
 
 typedef struct {
   pin_operation_t operation;
@@ -27,6 +21,13 @@ static int g_system_state = UI_PAGE_INIT;
 
 static TaskHandle_t pin_task_handle = NULL;
 static TaskHandle_t menu_task_handle = NULL;
+static TaskHandle_t gen_seed_task_handle = NULL;
+
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
+  (void)xTask;
+  uart_printf("Stack overflow detected for task [%s]\n", pcTaskName);
+}
+
 int get_system_state(void) {
   xSemaphoreTake(system_state_semaphore, portMAX_DELAY);
   int state = g_system_state;
@@ -57,7 +58,8 @@ static bool pin_input(char *prompt, int min_len, int max_len, char *pin) {
   while (1) {
     layout_ui_pin_input(prompt, pos, index);
     max_index = pos >= min_len ? 10 : 9;
-    if (xQueueReceive(key_msg_queue, &msg, portMAX_DELAY) == pdPASS) {
+    if (xQueueReceive(ui_key_msg_queue, &msg, pdMS_TO_TICKS(1000 * 60 * 1)) ==
+        pdPASS) {
       if (msg.value == KEY_CANCEL) {
         if (pos > 0) {
           pos--;
@@ -80,6 +82,8 @@ static bool pin_input(char *prompt, int min_len, int max_len, char *pin) {
       } else if (msg.value == KEY_DOWN) {
         index = index < max_index ? index + 1 : 1;
       }
+    } else {
+      return false;
     }
   }
 }
@@ -110,9 +114,32 @@ static void pin_task(void *pvParameters) {
 
   memset(pin, 0, sizeof(pin));
   memset(pin_confirm, 0, sizeof(pin_confirm));
-  layout_ui_home();
-  set_system_state(UI_PAGE_HOME);
+  layout_set_home();
+  
   pin_task_handle = NULL;
+  vTaskDelete(NULL);
+}
+
+static void gen_fido_seed_task(void *pvParameters) {
+  (void)pvParameters;
+  uint8_t percent = 0;
+  UI_WAIT_CALLBACK ui_callback = se_get_ui_callback();
+  while (1) {
+    secbool ret = se_gen_root_node(&percent);
+    if (ret) {
+      if (percent == 100) {
+        se_fido_set_seed_cached(true);
+        break;
+      }
+      if (ui_callback) {
+        ui_callback(_(C__PROCESSING_ETC), percent * 10);
+      }
+    } else {
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  gen_seed_task_handle = NULL;
   vTaskDelete(NULL);
 }
 
@@ -121,7 +148,7 @@ void menu_task(void *pvParameters) {
   key_msg_t msg;
   while (1) {
     menu_display_refresh();
-    if (xQueueReceive(key_msg_queue, &msg, portMAX_DELAY) == pdPASS) {
+    if (xQueueReceive(ui_key_msg_queue, &msg, portMAX_DELAY) == pdPASS) {
       if (msg.value == KEY_CANCEL) {
         if (menu_exit()) {
           break;
@@ -135,8 +162,7 @@ void menu_task(void *pvParameters) {
       }
     }
   }
-  layout_ui_home();
-  set_system_state(UI_PAGE_HOME);
+  
   menu_task_handle = NULL;
   vTaskDelete(NULL);
 }
@@ -150,58 +176,81 @@ static void ui_status_bar_task(void *pvParameters) {
   }
 }
 
+void layout_set_home(void) {
+  ui_msg_t ui_msg = {
+    .msg_type = UI_MSG_HOME,
+    .dialog = NULL,
+  };
+  set_system_state(UI_PAGE_HOME);
+  xQueueOverwrite(ui_msg_queue, &ui_msg);
+}
+
 static void ui_lcd_task(void *pvParameters) {
   (void)pvParameters;
-
-  // if (!config_isInitialized()) {
-  //   layout_language_set(KEY_NULL);
-  //   current_page = UI_PAGE_LANGUAGE_SELECT;
-  // } else {
-  //   layoutHome();
-  //   current_page = UI_PAGE_HOME;
-  // }
 
   layout_ui_home();
 
   set_system_state(UI_PAGE_HOME);
+  ui_msg_t ui_msg;
+  key_msg_t key_msg;
 
   while (1) {
-    key_msg_t msg;
-    if (xQueueReceive(key_msg_queue, &msg, portMAX_DELAY) == pdPASS) {
-      int state = get_system_state();
-      switch (state) {
-        case UI_PAGE_HOME:
-          if (msg.value == KEY_CANCEL) {
+    if (xQueueReceive(ui_key_msg_queue, &key_msg, pdMS_TO_TICKS(5)) == pdPASS) {
+      {
+        int state = get_system_state();
+        switch (state) {
+          // case UI_PAGE_HOME:
+          //   if (key_msg.value == KEY_CANCEL) {
+          //     break;
+          //   }
+          //   if (!session_isUnlocked() && config_hasPin()) {
+          //     create_pin_task(PIN_OPERATION_VERIFY);
+          //   } else {
+          //     if (menu_task_handle == NULL) {
+          //       if (xTaskCreate(menu_task, "menu task", 1024, NULL,
+          //                       TASK_PRIORITY_HIGHEST,
+          //                       &menu_task_handle) != pdPASS) {
+          //         ensure(false, "menu_task create failed");
+          //       }
+          //     }
+          //   }
+          //   break;
+          default:
             break;
-          }
-          if (!session_isUnlocked() && config_hasPin()) {
-            if (pin_task_handle == NULL) {
-              pin_task_param_t data = {.operation = PIN_OPERATION_VERIFY};
-              if (xTaskCreate(pin_task, "pin task", 1024, &data,
-                              TASK_PRIORITY_HIGHEST,
-                              &pin_task_handle) != pdPASS) {
-                ensure(false, "pin_task create failed");
-              }
-            }
-          } else {
-            if (menu_task_handle == NULL) {
-              if (xTaskCreate(menu_task, "menu task", 1024, NULL,
-                              TASK_PRIORITY_HIGHEST,
-                              &menu_task_handle) != pdPASS) {
-                ensure(false, "menu_task create failed");
-              }
-            }
-          }
-          break;
-        default:
-          break;
+        }
+      }
+    }
+    if (xQueueReceive(ui_msg_queue, &ui_msg, pdMS_TO_TICKS(5)) == pdPASS) {
+      if (ui_msg.msg_type == UI_MSG_HOME) {
+        uart_printf("UI_MSG_HOME\n");
+        layout_ui_home();
       }
     }
   }
 }
 
 void create_ui_lcd_task(void) {
-  xTaskCreate(ui_lcd_task, "lcd task", 1024, NULL, TASK_PRIORITY_HIGH, NULL);
-  xTaskCreate(ui_status_bar_task, "status bar task", 256, NULL,
+  xTaskCreate(ui_lcd_task, "lcd task", 1024, NULL, TASK_PRIORITY_HIGHEST, NULL);
+  xTaskCreate(ui_status_bar_task, "status bar task", 1024, NULL,
               TASK_PRIORITY_MEDIUM, NULL);
+}
+
+void create_pin_task(pin_operation_t operation) {
+  if (pin_task_handle == NULL) {
+    static pin_task_param_t data;
+    data.operation = operation;
+    if (xTaskCreate(pin_task, "pin task", 1024, &data, TASK_PRIORITY_HIGHEST,
+                    &pin_task_handle) != pdPASS) {
+      ensure(false, "pin_task create failed");
+    }
+  }
+}
+
+void create_gen_seed_task(void) {
+  if (gen_seed_task_handle == NULL) {
+    if (xTaskCreate(gen_fido_seed_task, "gen fido seed task", 256, NULL,
+                    TASK_PRIORITY_HIGHEST, &gen_seed_task_handle) != pdPASS) {
+      ensure(false, "gen_seed_task create failed");
+    }
+  }
 }

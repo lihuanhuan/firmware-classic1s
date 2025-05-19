@@ -50,6 +50,17 @@
 #include "zkp_context.h"
 #endif
 #include "compatible.h"
+#include "usart.h"
+
+#include "fido2/ctap.h"
+
+#include "FreeRTOS.h"
+#include "task.h"
+
+#include "command_task.h"
+#include "key_task.h"
+#include "ui_lcd_task.h"
+#include "user_messages.h"
 
 #ifdef USE_SECP256K1_ZKP
 void secp256k1_default_illegal_callback_fn(const char *str, void *data) {
@@ -133,6 +144,7 @@ void check_busy_screen(void) {
 }
 
 static void collect_hw_entropy(bool privileged) {
+  return;
 #if EMULATOR
   (void)privileged;
   memzero(HW_ENTROPY_DATA, HW_ENTROPY_LEN);
@@ -185,7 +197,7 @@ static void set_thd89_session_key(void) {
 #endif
 }
 #if !EMULATOR
-static void verify_ble_firmware(void) {
+void verify_ble_firmware(void) {
   uint8_t pubkey[65], rand_buffer[16], digest[32], sign[64];
   uint8_t key;
 #if !EMULATOR
@@ -231,6 +243,7 @@ static void verify_ble_firmware(void) {
          NULL);
 }
 #endif
+
 int main(void) {
 #ifndef APPVER
   setup();
@@ -240,29 +253,31 @@ int main(void) {
 #else
   setupApp();
 #if !FIRMWARE_QA
-  check_and_replace_bootloader(true);
+  // check_and_replace_bootloader(true);
 #endif
   // ble_reset();
+
 #if !EMULATOR
-  register_timer("button", timer1s / 2, buttonsTimer);
-  register_timer("button_long", timer1s / 5, longPressTimer);
-  register_timer("charge_dis", timer1s, chargeDisTimer);
+  // register_timer("button", timer1s / 2, buttonsTimer);
+  // register_timer("button_long", timer1s / 5, longPressTimer);
+  // register_timer("charge_dis", timer1s, chargeDisTimer);
 #endif
   __stack_chk_guard = random32();  // this supports compiler provided
                                    // unpredictable stack protection checks
 #endif
 
   drbg_init();
-  timer_init();
+  // timer_init();
+
   set_thd89_session_key();
 #if !EMULATOR
-  verify_ble_firmware();
-  HW_VER_t ble_hw_ver;
-  char *ble_ver = NULL;
-  ble_get_version(&ble_ver);
-  if (compare_str_version(ble_ver, "1.5.3") >= 0) {
-    ensure(ble_get_hw_version(&ble_hw_ver) ? sectrue : secfalse, NULL);
-  }
+  // verify_ble_firmware();
+  // HW_VER_t ble_hw_ver;
+  // char *ble_ver = NULL;
+  // ble_get_version(&ble_ver);
+  // if (compare_str_version(ble_ver, "1.5.3") >= 0) {
+  //   ensure(ble_get_hw_version(&ble_hw_ver) ? sectrue : secfalse, NULL);
+  // }
 
 #endif
   if (!is_mode_unprivileged()) {
@@ -270,7 +285,7 @@ int main(void) {
     collect_hw_entropy(true);
 #ifdef APPVER
     // enable MPU (Memory Protection Unit)
-    mpu_config_firmware();
+    // mpu_config_firmware();
 #endif
   } else {
     cpu_mode = UNPRIVILEGED;
@@ -278,7 +293,7 @@ int main(void) {
   }
 
 #ifdef USE_SECP256K1_ZKP
-  ensure(sectrue * (zkp_context_init() == 0), NULL);
+  // ensure(sectrue * (zkp_context_init() == 0), NULL);
 #endif
 
 #if DEBUG_LINK
@@ -288,6 +303,29 @@ int main(void) {
 #endif
 
   config_init();
+  // config_unlock("0000");
+
+  usart_setup();
+  uart_printf("trezor start\n");
+
+  font_init();
+  menu_default();
+  usbInit();
+
+  ctap_init();
+
+  user_messages_init();
+  create_ui_lcd_task();
+  create_key_task();
+  create_command_task();
+
+  vTaskStartScheduler();
+
+  // Never reach here
+  while (1) {
+   
+  }
+
   menu_default();
   font_init();
   layoutHome();

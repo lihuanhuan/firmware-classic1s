@@ -70,6 +70,7 @@ typedef struct {
   STORAGE_BOOL(trezor_comp_mode)
   STORAGE_BOOL(usb_lock)
   STORAGE_BOOL(input_direction)
+  STORAGE_UINT32(fido_reset_count)
 } PubConfig __attribute__((aligned(1)));
 
 typedef struct {
@@ -91,7 +92,7 @@ typedef struct {
 #define KEY_TREZOR_COMP_MODE offsetof(PubConfig, trezor_comp_mode)
 #define KEY_USB_LOCK offsetof(PubConfig, usb_lock)
 #define KEY_INPUT_DIRECTION offsetof(PubConfig, input_direction)
-
+#define KEY_FIDO_RESET_COUNT offsetof(PubConfig, fido_reset_count)
 #define PRIVATE_KEY 1 << 31
 
 #if EMULATOR
@@ -245,6 +246,10 @@ static secbool config_set_uint32(const uint32_t id, uint32_t value) {
 }
 
 void config_init(void) {
+
+  se_set_ui_callback(&layoutProgressAdapter);
+  ensure(se_sync_session_key(), "se sync session key failed");
+  return;
   char oldTiny = usbTiny(1);
 
 #if !EMULATOR
@@ -628,6 +633,16 @@ void config_setSleepDelayMs(uint32_t auto_sleep_ms) {
     autoSleepDelayMs = auto_sleep_ms;
     sleepDelayMsCached = sectrue;
   }
+}
+
+uint32_t config_getFidoResetCount(void) {
+  uint32_t fido_reset_count = 0;
+  config_get_uint32(KEY_FIDO_RESET_COUNT, &fido_reset_count);
+  return fido_reset_count;
+}
+
+void config_setFidoResetCount(uint32_t fido_reset_count) {
+  config_set_uint32(KEY_FIDO_RESET_COUNT, fido_reset_count);
 }
 
 void config_wipe(void) {

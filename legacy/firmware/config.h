@@ -189,6 +189,9 @@ bool config_getUsblock(bool *lock, bool mode);
 void config_setInputDirection(bool dir);
 bool config_getInputDirection(bool *dir);
 
+uint32_t config_getFidoResetCount(void);
+void config_setFidoResetCount(uint32_t fido_reset_count);
+
 extern char config_uuid_str[2 * UUID_SIZE + 1];
 
 #if DEBUG_LINK

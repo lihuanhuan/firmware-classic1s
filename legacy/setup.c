@@ -20,6 +20,7 @@
 #include <libopencm3/cm3/mpu.h>
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/cm3/scb.h>
+#include <libopencm3/cm3/systick.h>
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/rng.h>
@@ -200,6 +201,10 @@ void setupApp(void) {
   // change oled refresh frequency
   oledUpdateClk();
   gd32_flash_init();
+
+  systick_counter_disable();
+  systick_interrupt_disable();
+  scb_set_priority_grouping(SCB_AIRCR_PRIGROUP_GROUP16_NOSUB);
 }
 
 void mpu_config_off(void) {

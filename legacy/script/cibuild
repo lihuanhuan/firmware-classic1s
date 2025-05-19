@@ -18,12 +18,16 @@ else
 fi
 make -C vendor/libsol
 
+rm -rf *.d *.o
+
 make
 
 if [ "$EMULATOR" != 1 ]; then
     rm bootloader/*.bin || true
     make -C bootloader
 fi
+
+rm  -rf *.d *.o
 
 # invoking nanopb_generator to make sure its proto files are generated
 nanopb_generator >/dev/null || true

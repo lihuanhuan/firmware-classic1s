@@ -294,11 +294,6 @@ void layoutStatusLogo(void) {
     delay_ms(5);
   }
 
-  if (!ble_hw_ver_state()) {
-    ble_request_info(BLE_CMD_HW_VER);
-    delay_ms(5);
-  }
-
   if (logo_width == 0) {
     logo_width = ble_hw_ver_is_pure()
                      ? STATUS_LOGO_WIDTH_MAX - BATTERY_LOGO_WIDTH

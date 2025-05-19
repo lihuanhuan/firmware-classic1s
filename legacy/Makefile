@@ -1,6 +1,5 @@
 ifneq ($(EMULATOR),1)
 OBJS += setup.o
-OBJS += timer.o
 endif
 
 OBJS += buttons.o
@@ -39,7 +38,6 @@ OBJS += thd89.o
 endif
 
 OBJS += util.o
-OBJS += supervise.o
 OBJS += usb21_standard.o
 OBJS += usb_standard.o
 OBJS += util.o

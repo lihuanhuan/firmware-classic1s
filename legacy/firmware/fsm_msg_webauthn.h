@@ -85,8 +85,8 @@ void fsm_msgWebAuthnListResidentCredentials(
     desc.type = PUB_KEY_CRED_PUB_KEY;
     desc.cred_id_len = len - RP_ID_HASH_LENGTH;
     memcpy(desc.cred_id, cred_id_storage.credential_id, desc.cred_id_len);
-    if (ctap_authenticate_credential_data(cred_id_storage.rp_id_hash, &desc) ==
-        0) {
+    if (ctap_authenticate_credential_data(cred_id_storage.rp_id_hash, &desc,
+                                          true, true) == 0) {
       fsm_sendFailure(FailureType_Failure_ProcessError,
                       "The credential data is invalid.");
       return;
@@ -181,7 +181,7 @@ void fsm_msgWebAuthnAddResidentCredential(
   desc.cred_id_len = msg->credential_id.size;
   memcpy(desc.cred_id, msg->credential_id.bytes, desc.cred_id_len);
 
-  if (!ctap_authenticate_credential_data(NULL, &desc)) {
+  if (!ctap_authenticate_credential_data(NULL, &desc, true, false)) {
     fsm_sendFailure(FailureType_Failure_ProcessError,
                     "The credential you are trying to import does\nnot belong "
                     "to this authenticator.");
@@ -247,7 +247,8 @@ void fsm_msgWebAuthnRemoveResidentCredential(
     desc.type = PUB_KEY_CRED_PUB_KEY;
     desc.cred_id_len = len - RP_ID_HASH_LENGTH;
     memcpy(desc.cred_id, cred_id_storage.credential_id, desc.cred_id_len);
-    ctap_authenticate_credential_data(cred_id_storage.rp_id_hash, &desc);
+    ctap_authenticate_credential_data(cred_id_storage.rp_id_hash, &desc, true,
+                                      true);
   }
 
   layoutDialogAdapterEx(_(FIDO_2_REMOVE_CREDENTIALS), NULL, NULL,

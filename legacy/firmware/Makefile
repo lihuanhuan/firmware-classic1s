@@ -59,6 +59,9 @@ OBJS += header.o
 OBJS += startup.o
 endif
 
+OBJS += ../supervise.o
+OBJS += ../timer.o
+
 OBJS += font.o
 OBJS += font_ex.o
 OBJS += oled_text.o
@@ -90,11 +93,12 @@ OBJS += se_chip.o
 OBJS += psbt/psbt.o
 OBJS += bip322_simple/bip322_simple.o
 
-ifneq ($(BITCOIN_ONLY),1)
 OBJS += fido2/ctap_trans.o
 OBJS += fido2/ctap.o
 OBJS += fido2/ctap_parse.o
 OBJS += fido2/resident_credential.o
+
+ifneq ($(BITCOIN_ONLY),1)
 OBJS += ethereum.o
 OBJS += ethereum_definitions.o
 OBJS += ethereum_networks.o
@@ -284,6 +288,24 @@ OBJS += protob/messages-benfen.pb.o
 OBJS += protob/messages-neo.pb.o
 endif
 
+OBJS += ../vendor/freertos_kernel/portable/GCC/ARM_CM3/port.o
+OBJS += ../vendor/freertos_kernel/portable/MemMang/heap_4.o
+OBJS += ../vendor/freertos_kernel/tasks.o
+OBJS += ../vendor/freertos_kernel/queue.o
+OBJS += ../vendor/freertos_kernel/list.o
+OBJS += ../vendor/freertos_kernel/timers.o
+OBJS += ../vendor/freertos_kernel/event_groups.o
+OBJS += ../vendor/freertos_kernel/stream_buffer.o
+
+OBJS += freertos/user_messages.o
+OBJS += freertos/ui_lcd_task.o
+OBJS += freertos/key_task.o
+OBJS += freertos/layout_ui.o
+OBJS += freertos/command_task.o
+
+CFLAGS += -I../vendor/freertos_kernel/include -I../vendor/freertos_kernel/portable/GCC/ARM_CM3/ -I./freertos 
+CFLAGS += -I./freertos
+
 OPTFLAGS ?= -Os
 
 ../vendor/trezor-crypto/bip32.o: OPTFLAGS = -Os
@@ -324,6 +346,7 @@ CFLAGS += -DCBOR_NO_FLOATING_POINT=l
 
 CFLAGS += -DUSE_CARDANO=1
 
+CFLAGS += -DFREERTOS_ENABLED=1
 %:: %.mako defs
 	@printf "  MAKO    $@\n"
 	$(Q)$(PYTHON) ../vendor/trezor-common/tools/cointool.py render $(MAKO_RENDER_FLAG) $@.mako

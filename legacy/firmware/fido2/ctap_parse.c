@@ -602,13 +602,16 @@ uint8_t ctap_parse_extensions(CborValue *val, CTAP_extensions *ext) {
         ext->hmac_secret_present = EXT_HMAC_SECRET_PARSED;
         ctap_printf("parsed hmac_secret request\r\n");
       } else {
+        ext->hmac_secret_present = EXT_HMAC_SECRET_ERROR;
         ctap_printf(
             "warning: hmac_secret request ignored for being wrong type\r\n");
+        return CTAP2_ERR_INVALID_CBOR_TYPE;
       }
     } else if (strncmp(key, "credProtect", 11) == 0) {
       if (cbor_value_get_type(&map) == CborIntegerType) {
         ret = cbor_value_get_int(&map, (int *)&ext->cred_protect);
         check_ret(ret);
+        ctap_printf("credProtect: %d\r\n", ext->cred_protect);
       } else {
         ctap_printf(
             "warning: credProtect request ignored for being wrong type\r\n");
@@ -621,10 +624,8 @@ uint8_t ctap_parse_extensions(CborValue *val, CTAP_extensions *ext) {
   return 0;
 }
 
-uint8_t ctap_parse_make_credential(CTAP_makeCredential *MC,
-                                   CborEncoder *encoder, uint8_t *request,
+uint8_t ctap_parse_make_credential(CTAP_makeCredential *MC, uint8_t *request,
                                    int length) {
-  (void)encoder;
   int ret;
   unsigned int i;
   int key;

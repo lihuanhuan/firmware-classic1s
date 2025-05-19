@@ -24,19 +24,21 @@
 
 #if !EMULATOR
 
-#define SVC_FLASH_UNLOCK 0
-#define SVC_FLASH_ERASE 1
-#define SVC_FLASH_PROGRAM 2
-#define SVC_FLASH_LOCK 3
-#define SVC_TIMER_MS 4
-#define SVC_REBOOT_TO_BOOTLOADER 5
+typedef enum {
+  SVC_FREERTOS_INIT = 0,
+  SVC_FLASH_UNLOCK,
+  SVC_FLASH_ERASE,
+  SVC_FLASH_PROGRAM,
+  SVC_FLASH_LOCK,
+  SVC_TIMER_MS,
+  SVC_REBOOT_TO_BOOTLOADER,
+  SVC_SYS_RESET,
+  SVC_SYS_SLEEP,
+  SVC_SYS_PRIVILEGED,
+} svc_number_t;
 
 #define STAY_IN_BOOTLOADER_FLAG_ADDR ((uint32_t *)0x20010000)
 #define STAY_IN_BOOTLOADER_FLAG 0x0FC35A96
-
-#define SVC_SYS_RESET 10
-#define SVC_SYS_SLEEP 11
-#define SVC_SYS_PRIVILEGED 12
 
 /* Unlocks flash.  This function needs to be called before programming
  * or erasing. Multiple calls of flash_program and flash_erase can

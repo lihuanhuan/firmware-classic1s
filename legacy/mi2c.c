@@ -249,9 +249,8 @@ void vMI2CDRV_Init(void) {
  */
 bool bMI2CDRV_ReceiveData(uint8_t *pucStr, uint16_t *pusRevLen) {
   int ret = 0;
-  __disable_irq();
+  
   ret = bMI2CDRV_ReadBytes(MI2CX, pucStr, pusRevLen);
-  __enable_irq();
   if (ret < 0) {
     ensure(secfalse, "i2c read error");
   } else if (ret == 1) {
@@ -260,6 +259,7 @@ bool bMI2CDRV_ReceiveData(uint8_t *pucStr, uint16_t *pusRevLen) {
 
   return true;
 }
+
 /*
  *master i2c send
  */
@@ -267,11 +267,10 @@ bool bMI2CDRV_SendData(uint8_t *pucStr, uint16_t usStrLen) {
   if (usStrLen > (MI2C_BUF_MAX_LEN - 3)) {
     usStrLen = MI2C_BUF_MAX_LEN - 3;
   }
-  __disable_irq();
   if (!bMI2CDRV_WriteBytes(MI2CX, pucStr, usStrLen)) {
     ensure(secfalse, "i2c write error");
   }
-  __enable_irq();
+  
   return true;
 }
 

@@ -141,6 +141,8 @@ uint16_t se_lasterror(void);
 bool se_isFactoryMode(void);
 bool se_disableFactoryMode(void);
 
+bool se_fido_get_seed_cached(void);
+void se_fido_set_seed_cached(bool cached);
 secbool se_gen_root_node(uint8_t *percent);
 secbool se_u2f_register(const uint8_t app_id[32], const uint8_t challenge[32],
                         uint8_t key_handle[64], uint8_t pub_key[65],

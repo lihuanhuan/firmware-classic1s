@@ -21,6 +21,8 @@ typedef struct {
   TickType_t long_press_time;
 } button_state_t;
 
+static key_state_t current_key_state = KEY_STATE_UI;
+
 static const button_config_t button_configs[] = {
     {BTN_PORT, BTN_PIN_YES, false, KEY_CONFIRM},
     {BTN_PORT, BTN_PIN_UP, false, KEY_UP},
@@ -53,7 +55,11 @@ static void key_scan_task(void *pvParameters) {
           if (xTaskGetTickCount() - button_state->last_press_time >
               debounce_time) {
             key_msg_t msg = {button_configs[i].value, 0};
-            xQueueSend(key_msg_queue, &msg, portMAX_DELAY);
+            if (current_key_state == KEY_STATE_UI) {
+              xQueueSend(ui_key_msg_queue, &msg, portMAX_DELAY);
+            } else {
+              xQueueSend(cmd_key_msg_queue, &msg, portMAX_DELAY);
+            }
           }
         }
       }
@@ -65,13 +71,17 @@ static void key_scan_task(void *pvParameters) {
 uint8_t key_wait_for_exit(uint32_t timeout) {
   key_msg_t msg;
   if (timeout == 0) {
-    xQueueReceive(key_msg_queue, &msg, portMAX_DELAY);
+    xQueueReceive(ui_key_msg_queue, &msg, portMAX_DELAY);
   } else {
-    xQueueReceive(key_msg_queue, &msg, pdMS_TO_TICKS(timeout));
+    xQueueReceive(ui_key_msg_queue, &msg, pdMS_TO_TICKS(timeout));
   }
   return msg.value;
 }
 
+void set_key_state(key_state_t state) {
+    current_key_state = state;
+}
+
 void create_key_task(void) {
-  xTaskCreate(key_scan_task, "key task", 100, NULL, TASK_PRIORITY_HIGH, NULL);
+  xTaskCreate(key_scan_task, "key task", 128, NULL, TASK_PRIORITY_HIGH, NULL);
 }

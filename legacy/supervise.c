@@ -27,6 +27,10 @@
 #include "memory.h"
 #include "util.h"
 
+#ifdef APPVER
+extern void vPortSVCHandler(void);
+#endif
+
 #if !EMULATOR
 
 static void svhandler_flash_unlock(void) {
@@ -89,6 +93,11 @@ extern volatile uint32_t system_millis;
 void svc_handler_main(uint32_t *stack) {
   uint8_t svc_number = ((uint8_t *)stack[6])[-2];
   switch (svc_number) {
+#ifdef APPVER
+    case SVC_FREERTOS_INIT:
+      vPortSVCHandler();
+      break;
+#endif
     case SVC_FLASH_UNLOCK:
       svhandler_flash_unlock();
       break;

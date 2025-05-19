@@ -119,12 +119,14 @@ void menu_enter(void) {
   }
 }
 
-void menu_exit(void) {
+bool menu_exit(void) {
   currentMenu->current = currentMenu->start;
   if (currentMenu->previous == NULL) {
     layoutHome();
+    return true;
   } else {
     currentMenu = currentMenu->previous;
+    return false;
   }
 }
 
@@ -169,3 +171,5 @@ void menu_run(uint8_t key, uint32_t time) {
   }
 #endif
 }
+
+void menu_display_refresh(void) { menu_display(currentMenu); }

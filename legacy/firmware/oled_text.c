@@ -127,7 +127,7 @@ const char *get_next_word(const char *text) {
 
     bool is_break = (unicode <= 0x20) || (unicode == ':') || (unicode == '.') ||
                     (unicode == ',') || (unicode == '!') ||
-                    (unicode == '?') ||  // space, \n, \r, \t, etc.
+                    (unicode == '?') || (unicode == '@') ||// space, \n, \r, \t, etc.
                     (unicode >= 0x4E00 && unicode <= 0x9FFF) ||
                     (unicode >= 0x3040 && unicode <= 0x30FF) ||
                     (unicode >= 0xAC00 && unicode <= 0xD7A3);

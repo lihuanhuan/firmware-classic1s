@@ -9,7 +9,7 @@ uint32_t resident_credential_get_count(void) { return 0; }
 
 uint32_t resident_credential_find_by_rp_id_hash(
     const uint8_t *rp_id_hash, CTAP_credentialDescriptor *cred_desc,
-    uint32_t max_count) {
+    uint32_t max_count, bool user_verified) {
   CTAP_credential_id_storage cred_id_storage = {0};
   uint16_t len =
       sizeof(cred_id_storage) - FIDO2_RESIDENT_CREDENTIALS_HEADER_LEN;
@@ -27,6 +27,13 @@ uint32_t resident_credential_find_by_rp_id_hash(
                                           &len) == SE_FIDO2_SLOT_DATA_OK) {
       ctap_printf("get resident credential %d\n", i);
       dump_hex1(NULL, cred_id_storage.rp_id_hash, len);
+      uint8_t cred_protect = cred_id_storage.credential_id[3];
+      if (cred_protect == EXT_CRED_PROTECT_OPTIONAL_WITH_CREDID ||
+          cred_protect == EXT_CRED_PROTECT_REQUIRED) {
+        if (!user_verified) {
+          continue;
+        }
+      }
       if (memcmp(cred_id_storage.rp_id_hash, rp_id_hash, RP_ID_HASH_LENGTH) ==
           0) {
         ctap_printf("find same rp id hash\n");
@@ -34,7 +41,8 @@ uint32_t resident_credential_find_by_rp_id_hash(
                len - RP_ID_HASH_LENGTH);
         cred_desc[count].cred_id_len = len - RP_ID_HASH_LENGTH;
         cred_desc[count].type = PUB_KEY_CRED_PUB_KEY;
-        ctap_authenticate_credential_data(rp_id_hash, &cred_desc[count]);
+        ctap_authenticate_credential_data(rp_id_hash, &cred_desc[count],
+                                          user_verified, true);
         count++;
       }
     }
@@ -74,7 +82,7 @@ bool resident_credential_store(const uint8_t *rp_id_hash,
         cred_id_desc.cred_id_len = len - RP_ID_HASH_LENGTH;
         memcpy(cred_id_desc.cred_id, cred_id_storage.credential_id,
                len - RP_ID_HASH_LENGTH);
-        ctap_authenticate_credential_data(rp_id_hash, &cred_id_desc);
+        ctap_authenticate_credential_data(rp_id_hash, &cred_id_desc,true,true);
         if (memcmp(cred_id_desc.credential.user.id, user_id,
                    cred_id_desc.credential.user.id_size) == 0) {
           ctap_printf("find same user id, override\n");
@@ -139,7 +147,7 @@ int resident_credential_get_desc(uint8_t index,
     memcpy(cred_desc->cred_id, cred_id_storage.credential_id,
            cred_desc->cred_id_len);
     if (ctap_authenticate_credential_data(cred_id_storage.rp_id_hash,
-                                          cred_desc) == 0) {
+                                          cred_desc,true,true) == 0) {
       return 0;
     }
   }
@@ -149,3 +157,5 @@ int resident_credential_get_desc(uint8_t index,
 bool resident_credential_delete(uint8_t index) {
   return se_delete_fido2_resident_credentials(index);
 }
+
+void resident_credential_clear(void) { se_delete_all_fido2_credentials(); }

@@ -39,8 +39,10 @@ void menu_display(struct menu *menu);
 void menu_up(void);
 void menu_down(void);
 void menu_enter(void);
+bool menu_exit(void);
 void menu_run(uint8_t key, uint32_t time);
 void menu_refresh(void);
+void menu_display_refresh(void);
 #define menu_update(menu, field, value) (menu)->field = value
 
 #endif

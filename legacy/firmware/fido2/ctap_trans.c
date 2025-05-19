@@ -51,14 +51,14 @@
 #include "ctap.h"
 #include "ctap_trans.h"
 #include "memory.h"
+#include "resident_credential.h"
 #include "se_chip.h"
 #include "u2f.h"
 #include "u2f_hid.h"
 #include "u2f_keys.h"
 #include "u2f_knownapps.h"
 
-// About 1/2 Second according to values used in protect.c
-#define CTAP_HID_TIMEOUT (timer1s / 2)
+#define CTAP_HID_TIMEOUT (500)
 
 // Initialise without a cid
 static uint32_t cid = 0;
@@ -86,53 +86,17 @@ uint8_t u2f_out_packets[U2F_OUT_PKT_BUFFER_LEN][HID_RPT_SIZE];
 #define BOGUS_APPID_FIREFOX \
   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
 
-// Auth/Register request state machine
-typedef enum {
-  INIT = 0,
-  AUTH = 10,
-  AUTH_PASS = 11,
-  REG = 20,
-  REG_PASS = 21,
-  REQUEST_PIN = 30
-} U2F_STATE;
-
-bool u2f_init_command = false;
-static bool next_page = false;
-static bool se_seed_cached = false;
-static volatile bool usb_hid_tiny = false;
-extern bool protectAbortedByFIDO;
-
 typedef enum {
   TRANSPORT_NULL = 0,
   TRANSPORT_HID = 1,
   TRANSPORT_BLE = 2,
 } TRANSPORT_TYPE;
-static uint8_t transport_type = 0;
-static uint8_t poll_nest = 0;
 
-typedef struct {
-  uint8_t reserved;
-  uint8_t appId[U2F_APPID_SIZE];
-  uint8_t chal[U2F_CHAL_SIZE];
-  uint8_t keyHandle[KEY_HANDLE_LEN];
-  uint8_t pubKey[U2F_PUBKEY_LEN];
-} U2F_REGISTER_SIG_STR;
+static uint8_t transport_type = TRANSPORT_HID;
 
-typedef struct {
-  uint8_t appId[U2F_APPID_SIZE];
-  uint8_t flags;
-  uint8_t ctr[4];
-  uint8_t chal[U2F_CHAL_SIZE];
-} U2F_AUTHENTICATE_SIG_STR;
+static uint8_t error_code = 0;
 
-typedef struct {
-  uint32_t dialog_timer_start;
-  bool is_busy;
-  U2F_STATE last_req_state;
-} DIALOG_MANAGER;
-
-static DIALOG_MANAGER dialog_manager = {
-    .dialog_timer_start = 0, .is_busy = false, .last_req_state = INIT};
+static fido2_context_t fido2_context = {0};
 
 uint32_t next_cid(void) {
   // extremely unlikely but hey
@@ -146,38 +110,733 @@ uint32_t next_cid(void) {
 // states the following:
 // With a packet size of 64 bytes (max for full-speed devices), this means that
 // the maximum message payload length is 64 - 7 + 128 * (64 - 5) = 7609 bytes.
-#define U2F_MAXIMUM_PAYLOAD_LENGTH 7609
+#define FIDO_MAX_PAYLOAD_SIZE 7609
+
 typedef struct {
-  uint8_t buf[U2F_MAXIMUM_PAYLOAD_LENGTH];
-  uint8_t *buf_ptr;
-  uint32_t len;
-  uint8_t seq;
+  uint32_t cid;
   uint8_t cmd;
-} U2F_ReadBuffer;
+  hid_receive_state_t receive_state;
+  uint16_t len;
+  uint16_t recv_len;
+  uint8_t seq;
+  uint8_t buffer[FIDO_MAX_PAYLOAD_SIZE];
+} rx_session_t;
 
-U2F_ReadBuffer *reader;
+static rx_session_t rx_session = {0};
 
-bool dialog_is_busy(void) {
-  // if (dialog_manager.is_busy) {
-  //   if (timer_ms() - dialog_manager.dialog_timer_start >
-  //   CTAP_HID_TIMEOUT) {
-  //     dialog_update_state(false, 0);
-  //     dialog_manager.is_busy = false;
-  //     return false;
-  //   }
-  //   return true;
+void queue_u2f_pkt(const U2FHID_FRAME *u2f_pkt) {
+  // debugLog(0, "", "u2f_write_pkt");
+  uint32_t next = (u2f_out_end + 1) % U2F_OUT_PKT_BUFFER_LEN;
+  if (u2f_out_start == next) {
+    debugLog(0, "", "u2f_write_pkt full");
+    return;  // Buffer full :(
+  }
+  memcpy(u2f_out_packets[u2f_out_end], u2f_pkt, HID_RPT_SIZE);
+  u2f_out_end = next;
+}
+
+uint8_t *u2f_out_data(void) {
+  if (u2f_out_start == u2f_out_end) return NULL;  // No data
+  // debugLog(0, "", "u2f_out_data");
+  uint32_t t = u2f_out_start;
+  u2f_out_start = (u2f_out_start + 1) % U2F_OUT_PKT_BUFFER_LEN;
+  return u2f_out_packets[t];
+}
+
+void send_u2fhid_msg(const uint8_t cmd, const uint8_t *data,
+                     const uint32_t len) {
+  if (len > FIDO_MAX_PAYLOAD_SIZE) {
+    debugLog(0, "", "send_u2fhid_msg failed");
+    return;
+  }
+
+  U2FHID_FRAME f = {0};
+  uint8_t *p = (uint8_t *)data;
+  uint32_t l = len;
+  uint32_t psz = 0;
+  uint8_t seq = 0;
+
+  // debugLog(0, "", "send_u2fhid_msg");
+
+  memzero(&f, sizeof(f));
+  f.cid = cid;
+  f.init.cmd = cmd;
+  f.init.bcnth = len >> 8;
+  f.init.bcntl = len & 0xff;
+
+  // Init packet
+  psz = MIN(sizeof(f.init.data), l);
+  memcpy(f.init.data, p, psz);
+  queue_u2f_pkt(&f);
+  l -= psz;
+  p += psz;
+
+  // Cont packet(s)
+  for (; l > 0; l -= psz, p += psz) {
+    // debugLog(0, "", "send_u2fhid_msg con");
+    memzero(&f.cont.data, sizeof(f.cont.data));
+    f.cont.seq = seq++;
+    psz = MIN(sizeof(f.cont.data), l);
+    memcpy(f.cont.data, p, psz);
+    queue_u2f_pkt(&f);
+  }
+
+  if (data + len != p) {
+    debugLog(0, "", "send_u2fhid_msg is bad");
+    debugInt(data + len - p);
+  }
+  usb_u2f_data_send();
+}
+
+void send_u2fhid_error(uint32_t fcid, uint8_t err) {
+  U2FHID_FRAME f = {0};
+
+  memzero(&f, sizeof(f));
+  f.cid = fcid;
+  f.init.cmd = U2FHID_ERROR;
+  f.init.bcntl = 1;
+  f.init.data[0] = err;
+  queue_u2f_pkt(&f);
+  usb_u2f_data_send();
+}
+
+void send_u2f_error(const uint16_t err) {
+  uint8_t data[2] = {0};
+  data[0] = err >> 8 & 0xFF;
+  data[1] = err & 0xFF;
+  if (transport_type == TRANSPORT_BLE) {
+    if (err == U2F_SW_CONDITIONS_NOT_SATISFIED) {
+      return;
+    }
+    ctap_ble_u2f_send(U2FHID_MSG, data, 2);
+  } else {
+    send_u2f_msg(data, 2);
+  }
+}
+
+void send_u2f_msg(const uint8_t *data, const uint32_t len) {
+  if (transport_type == TRANSPORT_BLE) {
+    ctap_ble_u2f_send(U2FHID_MSG, (uint8_t *)data, len);
+  } else {
+    send_u2fhid_msg(U2FHID_MSG, data, len);
+  }
+}
+
+// FIDO2
+#include "ctap.h"
+#include "ctap_errors.h"
+#include "usart.h"
+
+// ble transport
+#define BLE_TRANSPORT_WAIT_TIME 10000  // 10 seconds
+
+static uint8_t ble_fido_data[1024 * 3];
+static uint16_t ble_fido_data_len = 0;
+static uint8_t ble_fido_response[1024];
+static uint8_t *ble_response_buffer = ble_fido_response;
+
+void set_ble_fido_data(const uint8_t *data, const uint16_t len) {
+  memcpy(ble_fido_data, data, len);
+  ble_fido_data_len = len;
+}
+
+void set_ble_fido_data_len(const uint16_t len) { ble_fido_data_len = len; }
+
+uint8_t *get_ble_fido_data_ptr(void) { return ble_fido_data; }
+
+void ctap_ble_u2f_send(uint8_t cmd, uint8_t *data, uint16_t len) {
+  ble_response_buffer[0] = cmd;
+  ble_response_buffer[1] = (len >> 8) & 0xff;
+  ble_response_buffer[2] = len & 0xff;
+  memcpy(ble_response_buffer + 3, data, len);
+  dump_hex1(NULL, ble_response_buffer, len + 3);
+  i2c_slave_send_fido(ble_response_buffer, len + 3);
+}
+
+void ctap_ble_ping(uint8_t *data, uint16_t len) {
+  ctap_ble_u2f_send(U2FHID_PING, data, len);
+}
+
+void ctap_ble_error(uint8_t err) {
+  uint8_t data = err;
+  ctap_ble_u2f_send(U2FHID_ERROR, &data, 1);
+}
+
+void ctap_ble_u2f_error(uint16_t err) {
+  uint8_t data[2] = {0};
+  data[0] = err >> 8 & 0xff;
+  data[1] = err & 0xff;
+  ctap_ble_u2f_send(U2FHID_MSG, data, 2);
+}
+
+void ctap_error(uint8_t err) {
+  if (transport_type == TRANSPORT_BLE) {
+    ctap_ble_error(err);
+  } else {
+    send_u2fhid_error(cid, err);
+  }
+}
+
+void send_cbor_error(const uint8_t err) {
+  send_u2fhid_msg(U2FHID_CBOR, (uint8_t *)&err, 1);
+}
+
+void ctap_hid_keepalive_status(void) {
+  uint8_t status = CTAPHID_STATUS_UPNEEDED;
+  if (transport_type == TRANSPORT_BLE) {
+    ctap_ble_u2f_send(U2FHID_KEEPALIVE, &status, 1);
+  } else {
+    send_u2fhid_msg(CTAPHID_KEEPALIVE, &status, 1);
+  }
+}
+
+void ctap_hid_keepalive_process(void) {
+  uint8_t status = CTAPHID_STATUS_PROCESSING;
+  if (transport_type == TRANSPORT_BLE) {
+    ctap_ble_u2f_send(U2FHID_KEEPALIVE, &status, 1);
+  } else {
+    send_u2fhid_msg(CTAPHID_KEEPALIVE, &status, 1);
+  }
+}
+
+void ctap_hid_keepalive_register(void) {
+  if (transport_type == TRANSPORT_BLE) {
+    register_loop_callback(ctap_hid_keepalive_status, timer_ms(), timer1s / 12);
+  } else {
+    register_timer("ctap_keepalive", timer1s / 12, ctap_hid_keepalive_status);
+  }
+}
+
+void ctap_hid_keepalive_unregister(void) {
+  if (transport_type == TRANSPORT_BLE) {
+    unregister_loop_callback();
+  } else {
+    unregister_timer("ctap_keepalive");
+  }
+}
+
+#if 1
+
+#include "key_task.h"
+#include "layout_ui.h"
+#include "ui_lcd_task.h"
+#include "user_messages.h"
+
+static TimerHandle_t hid_timeout_timer, keepalive_timer, state_check_timer,
+    error_timer;
+
+void clear_rx_session_cache(void) {
+  rx_session.receive_state = HID_RECEIVE_STATE_IDLE;
+  rx_session.len = 0;
+  rx_session.recv_len = 0;
+  rx_session.seq = 0;
+  xTimerStop(hid_timeout_timer, 0);
+}
+
+void hid_timeout_timer_callback(TimerHandle_t xTimer) {
+  (void)xTimer;
+  send_u2fhid_error(cid, ERR_MSG_TIMEOUT);
+  clear_rx_session_cache();
+}
+
+void keepalive_timer_callback(TimerHandle_t xTimer) {
+  (void)xTimer;
+  ctap_hid_keepalive_status();
+}
+
+#define PIN_CHECK_TIMEOUT_COUNT 600      // 600 * 100ms = 60 seconds
+#define SEED_CHECK_TIMEOUT_COUNT 30      // 30 * 100ms = 3 seconds
+#define CONFIRM_CHECK_TIMEOUT_COUNT 600  // 600 * 100ms = 60 seconds
+
+void reset_fido_context(void) {
+  xTimerStop(state_check_timer, 0);
+  xTimerStop(keepalive_timer, 0);
+  xTimerStop(error_timer, 0);
+  fido2_context.state = FIDO_OPERATIONAL_STATE_INIT;
+  layout_set_home();
+}
+
+void state_check_timer_callback(TimerHandle_t xTimer) {
+  (void)xTimer;
+  static uint32_t count = 0;
+  bool condition_met = false;
+  uint32_t timeout_count = 0;
+
+  switch (fido2_context.state) {
+    case FIDO_OPERATIONAL_STATE_WAIT_PIN:
+      condition_met = session_isUnlocked();
+      timeout_count = PIN_CHECK_TIMEOUT_COUNT;
+      break;
+
+    case FIDO_OPERATIONAL_STATE_WAIT_SEED:
+      condition_met = se_fido_get_seed_cached();
+      timeout_count = SEED_CHECK_TIMEOUT_COUNT;
+      break;
+
+    case FIDO_OPERATIONAL_STATE_WAIT_CONFIRM:
+      timeout_count = CONFIRM_CHECK_TIMEOUT_COUNT;
+      condition_met = false;
+      break;
+
+    default:
+      count = 0;
+      return;
+  }
+
+  if (!condition_met) {
+    count++;
+    if (count > timeout_count) {
+      count = 0;
+      reset_fido_context();
+      ctap_error(CTAP2_ERR_USER_ACTION_TIMEOUT);
+    }
+    // if (count == 10 &&
+    //     fido2_context.state == FIDO_OPERATIONAL_STATE_WAIT_CONFIRM) {
+    //   count = 0;
+    //   key_msg_t key_msg = {0};
+    //   key_msg.value = KEY_CONFIRM;
+    //   xQueueSend(cmd_key_msg_queue, &key_msg, portMAX_DELAY);
+    // }
+  } else {
+    count = 0;
+    reset_fido_context();
+    rx_session_t *p_rx_session = &rx_session;
+    xQueueSend(fido_msg_queue, &p_rx_session, portMAX_DELAY);
+  }
+}
+
+void error_timer_callback(TimerHandle_t xTimer) {
+  (void)xTimer;
+  uart_printf("error timer\n");
+  reset_fido_context();
+  send_cbor_error(error_code);
+}
+
+void init_fido_timers(void) {
+  hid_timeout_timer =
+      xTimerCreate("hid timeout timer", pdMS_TO_TICKS(CTAP_HID_TIMEOUT),
+                   pdFALSE, NULL, hid_timeout_timer_callback);
+  keepalive_timer = xTimerCreate("keepalive timer", pdMS_TO_TICKS(100), pdTRUE,
+                                 NULL, keepalive_timer_callback);
+  state_check_timer = xTimerCreate("state check timer", pdMS_TO_TICKS(100),
+                                   pdTRUE, NULL, state_check_timer_callback);
+  error_timer = xTimerCreate("error timer", pdMS_TO_TICKS(1000), pdFALSE, NULL,
+                             error_timer_callback);
+}
+
+void handle_init_cmd(rx_session_t *rx);
+
+void u2fhid_read(char tiny, const U2FHID_FRAME *f) {
+  (void)tiny;
+
+  rx_session_t *p_rx_session = &rx_session;
+
+  if (f->init.cmd == U2FHID_INIT) {
+    uart_printf("init command\n");
+    if (MSG_LEN(*f) != INIT_NONCE_SIZE) {
+      send_u2fhid_error(f->cid, ERR_INVALID_LEN);
+      return;
+    }
+    if (f->cid == 0) {
+      send_u2fhid_error(f->cid, ERR_INVALID_CID);
+      return;
+    }
+
+    rx_session.cid = f->cid;
+    rx_session.cmd = f->type;
+    rx_session.len = INIT_NONCE_SIZE;
+    rx_session.seq = 0;
+    memcpy(rx_session.buffer, f->init.data, INIT_NONCE_SIZE);
+    rx_session.recv_len = INIT_NONCE_SIZE;
+    rx_session.receive_state = HID_RECEIVE_STATE_IDLE;
+
+    xTimerStop(hid_timeout_timer, 0);
+    xTimerStop(keepalive_timer, 0);
+    xTimerStop(state_check_timer, 0);
+
+    handle_init_cmd(p_rx_session);
+    return;
+  } else {
+    if (f->cid == CID_BROADCAST) {
+      send_u2fhid_error(f->cid, ERR_INVALID_CID);
+      return;
+    }
+
+    if (rx_session.receive_state == HID_RECEIVE_STATE_IDLE &&
+        !(f->init.cmd & TYPE_INIT)) {
+      return;
+    }
+
+    if (rx_session.cid != f->cid) {
+      return;
+    }
+
+    if (rx_session.receive_state == HID_RECEIVE_STATE_IDLE) {
+      if (f->init.cmd & TYPE_INIT) {
+        if (f->cid == 0) {
+          send_u2fhid_error(f->cid, ERR_INVALID_CID);
+          return;
+        }
+
+        if (MSG_LEN(*f) > FIDO_MAX_PAYLOAD_SIZE) {
+          send_u2fhid_error(f->cid, ERR_INVALID_LEN);
+          return;
+        }
+
+        rx_session.cid = f->cid;
+        rx_session.cmd = f->type;
+        rx_session.len = f->init.bcnth << 8 | f->init.bcntl;
+        rx_session.seq = 0;
+        memcpy(rx_session.buffer, f->init.data, sizeof(f->init.data));
+        rx_session.recv_len = sizeof(f->init.data);
+        if (rx_session.recv_len < rx_session.len) {
+          xTimerReset(hid_timeout_timer, 0);
+          rx_session.receive_state = HID_RECEIVE_STATE_RECEIVING;
+        }
+      }
+    } else {
+      if (rx_session.seq != f->cont.seq) {
+        clear_rx_session_cache();
+        send_u2fhid_error(f->cid, ERR_INVALID_SEQ);
+        return;
+      }
+      if (rx_session.cid != f->cid) {
+        clear_rx_session_cache();
+        send_u2fhid_error(f->cid, ERR_CHANNEL_BUSY);
+        return;
+      }
+
+      uint16_t remaining_len = rx_session.len - rx_session.recv_len;
+      uint16_t data_len = sizeof(f->cont.data) > remaining_len
+                              ? remaining_len
+                              : sizeof(f->cont.data);
+      memcpy(rx_session.buffer + rx_session.recv_len, f->cont.data, data_len);
+      rx_session.seq++;
+      rx_session.recv_len += data_len;
+      xTimerReset(hid_timeout_timer, 0);
+    }
+  }
+
+  if (rx_session.recv_len >= rx_session.len) {
+    rx_session.receive_state = HID_RECEIVE_STATE_IDLE;
+    xTimerStop(hid_timeout_timer, 0);
+    xQueueSend(fido_msg_queue, &p_rx_session, portMAX_DELAY);
+  }
+}
+
+void handle_init_cmd(rx_session_t *rx) {
+  U2FHID_FRAME f = {0};
+  U2FHID_INIT_RESP resp = {0};
+
+  memzero(&resp, sizeof(resp));
+  memzero(&f, sizeof(f));
+
+  f.cid = rx->cid;
+  f.init.cmd = U2FHID_INIT;
+  f.init.bcnth = 0;
+  f.init.bcntl = sizeof(resp);
+
+  memcpy(resp.nonce, rx->buffer, rx->len);
+  resp.cid = next_cid();
+  rx->cid = resp.cid;
+  resp.versionInterface = U2FHID_IF_VERSION;
+  resp.versionMajor = VERSION_MAJOR;
+  resp.versionMinor = VERSION_MINOR;
+  resp.versionBuild = VERSION_PATCH;
+  resp.capFlags = CAPFLAG_WINK | CAPFLAG_CBOR;
+  memcpy(&f.init.data, &resp, sizeof(resp));
+
+  queue_u2f_pkt(&f);
+  uart_printf("send init response\n");
+  usb_u2f_data_send();
+}
+
+#include "u2f_command.h"
+
+uint8_t ctap_check_device_status(void) {
+  uint8_t status = CTAP1_ERR_SUCCESS;
+  // if (!config_isInitialized()) {
+  //   return CTAP1_ERR_OTHER;
   // }
-  return dialog_manager.is_busy;
-}
-uint32_t dialog_get_timer_start(void) {
-  return dialog_manager.dialog_timer_start;
+
+  if (!session_isUnlocked()) {
+    xTimerStart(keepalive_timer, 0);
+    create_pin_task(PIN_OPERATION_VERIFY);
+    fido2_context.state = FIDO_OPERATIONAL_STATE_WAIT_PIN;
+    return CTAP2_ERR_PIN_BLOCKED;
+  }
+
+  if (!se_fido_get_seed_cached()) {
+    xTimerStart(keepalive_timer, 0);
+    create_gen_seed_task();
+    fido2_context.state = FIDO_OPERATIONAL_STATE_WAIT_SEED;
+    return CTAP2_ERR_PIN_BLOCKED;
+  }
+  return status;
 }
 
-void dialog_update_state(bool busy, uint32_t timer_start) {
-  dialog_manager.is_busy = busy;
-  dialog_manager.dialog_timer_start = timer_start;
+uint8_t handle_ctap_cbor_cmd(const uint8_t *data, const uint32_t len) {
+  uint8_t cmd = data[0];
+  uint8_t status = CTAP1_ERR_SUCCESS;
+
+  if (fido2_context.state == FIDO_OPERATIONAL_STATE_INIT) {
+    if (len == 0) {
+      ctap_error(ERR_INVALID_LEN);
+      return 0;
+    }
+
+    // char *se_version = se_get_version();
+    // if (compare_str_version(se_version, "1.1.5") < 0) {
+    //   ctap_error(CTAP2_ERR_NOT_ALLOWED);
+    //   return 0;
+    // }
+
+    switch (cmd) {
+      case CTAP_MAKE_CREDENTIAL:
+      case CTAP_GET_ASSERTION:
+        status = ctap_check_device_status();
+        break;
+      default:
+        break;
+    }
+
+    if (fido2_context.state == FIDO_OPERATIONAL_STATE_WAIT_PIN ||
+        fido2_context.state == FIDO_OPERATIONAL_STATE_WAIT_SEED) {
+      xTimerReset(state_check_timer, 0);
+      return 0;
+    }
+  }
+
+  CborEncoder encoder;
+  CTAP_RESPONSE resp;
+  memset(&resp, 0, sizeof(resp));
+  memset(&encoder, 0, sizeof(CborEncoder));
+
+  uint8_t *ctap_status = resp.data;
+  uint8_t *ctap_data = resp.data + 1;
+  uint32_t ctap_data_len = sizeof(resp.data) - 1;
+
+  cbor_encoder_init(&encoder, ctap_data, ctap_data_len, 0);
+
+  switch (cmd) {
+    case CTAP_MAKE_CREDENTIAL:
+    case CTAP_GET_ASSERTION:
+      if (fido2_context.state == FIDO_OPERATIONAL_STATE_INIT) {
+        status =
+            (cmd == CTAP_MAKE_CREDENTIAL)
+                ? ctap_make_credential_phrase_1((uint8_t *)(data + 1), len - 1,
+                                                &fido2_context.data.mc)
+                : ctap_get_assertion_phrase_1((uint8_t *)(data + 1), len - 1,
+                                              &fido2_context.data.ga);
+        if (status == CTAP1_ERR_SUCCESS) {
+          if (cmd == CTAP_GET_ASSERTION &&
+              !(fido2_context.data.ga.up || fido2_context.data.ga.uv)) {
+            status =
+                ctap_get_assertion_phrase_2(&encoder, &fido2_context.data.ga);
+            fido2_context.state = FIDO_OPERATIONAL_STATE_INIT;
+            xTimerStop(keepalive_timer, 0);
+            *ctap_status =
+                (status == CTAP1_ERR_SUCCESS) ? CTAP1_ERR_SUCCESS : status;
+            resp.length =
+                (status == CTAP1_ERR_SUCCESS)
+                    ? cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1
+                    : 1;
+          } else {
+            fido2_context.cmd = cmd;
+            if (fido2_context.data.ga.valid_cred_count > 1) {
+              fido2_context.state = FIDO_OPERATIONAL_STATE_SELECT_CREDENTIAL;
+            } else {
+              fido2_context.state = FIDO_OPERATIONAL_STATE_WAIT_CONFIRM;
+            }
+            set_key_state(KEY_STATE_CMD);
+            xQueueReset(cmd_key_msg_queue);
+            xTimerReset(keepalive_timer, 0);
+            xTimerReset(state_check_timer, 0);
+            return 0;
+          }
+        } else {
+          if (cmd == CTAP_GET_ASSERTION) {
+            fido2_context.state = FIDO_OPERATIONAL_STATE_ASSERTION_FAILED;
+            error_code = status;
+            xTimerReset(keepalive_timer, 0);
+            xTimerReset(error_timer, 0);
+            return 0;
+          }
+          *ctap_status = status;
+          resp.length = 1;
+        }
+      } else {
+        status =
+            (cmd == CTAP_MAKE_CREDENTIAL)
+                ? ctap_make_credential_phrase_2(&encoder,
+                                                &fido2_context.data.mc)
+                : ctap_get_assertion_phrase_2(&encoder, &fido2_context.data.ga);
+
+        fido2_context.state = FIDO_OPERATIONAL_STATE_INIT;
+        layout_set_home();
+        xTimerStop(keepalive_timer, 0);
+        *ctap_status =
+            (status == CTAP1_ERR_SUCCESS) ? CTAP1_ERR_SUCCESS : status;
+        resp.length =
+            (status == CTAP1_ERR_SUCCESS)
+                ? cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1
+                : 1;
+      }
+      break;
+    case CTAP_GET_INFO:
+      ctap_get_info(&encoder);
+      *ctap_status = CTAP1_ERR_SUCCESS;
+      resp.length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
+      break;
+    case CTAP_CLIENT_PIN:
+      status = ctap_client_pin(&encoder, (uint8_t *)(data + 1), len - 1);
+      *ctap_status = status;
+      resp.length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
+      break;
+    case CTAP_RESET:
+      if (fido2_context.state == FIDO_OPERATIONAL_STATE_INIT) {
+        set_key_state(KEY_STATE_CMD);
+        xQueueReset(cmd_key_msg_queue);
+        xTimerReset(state_check_timer, 0);
+        xTimerReset(keepalive_timer, 0);
+        fido2_context.state = FIDO_OPERATIONAL_STATE_WAIT_CONFIRM;
+        layoutDialogAdapterEx("Reset", &bmp_bottom_left_close, NULL,
+                              &bmp_bottom_right_confirm, NULL, NULL,
+                              "Reset device?", NULL, NULL, NULL);
+        return 0;
+      } else {
+        fido2_context.state = FIDO_OPERATIONAL_STATE_INIT;
+        xTimerReset(keepalive_timer, 0);
+        xTimerReset(state_check_timer, 0);
+        resident_credential_clear();
+        se_reset_storage();
+        config_setFidoResetCount(config_nextU2FCounter());
+        ctap_reset_pin_consecutive_failures();
+        *ctap_status = CTAP1_ERR_SUCCESS;
+        resp.length = 1;
+      }
+      break;
+    case GET_NEXT_ASSERTION:
+      *ctap_status = CTAP2_ERR_NOT_ALLOWED;
+      resp.length = 1;
+      break;
+    default:
+      *ctap_status = CTAP1_ERR_INVALID_COMMAND;
+      resp.length = 1;
+      break;
+  }
+  ctap_printf("ctap response length: %d \n", resp.length);
+  // dump_hex1(NULL, resp.data, resp.length);
+  if (transport_type == TRANSPORT_BLE) {
+    ctap_printf("ble send response\n");
+    ctap_ble_u2f_send(U2FHID_MSG, resp.data, resp.length);
+  } else {
+    ctap_printf("hid send response\n");
+    send_u2fhid_msg(U2FHID_CBOR, resp.data, resp.length);
+  }
+  return 0;
 }
 
+void handle_msg(const APDU *a) {
+  if (a->cla != 0 && a->cla != 0x80) {
+    send_u2f_error(U2F_SW_CLA_NOT_SUPPORTED);
+    return;
+  }
+
+  switch (a->ins) {
+    case U2F_REGISTER:
+      handle_u2f_register(a);
+      break;
+    case U2F_AUTHENTICATE:
+      handle_u2f_authenticate(a);
+      break;
+    case U2F_VERSION:
+      u2f_version(a);
+      break;
+    default:
+      send_u2f_error(U2F_SW_INS_NOT_SUPPORTED);
+      break;
+  }
+}
+
+void handle_cbor_cancel(void) {
+  uart_printf("handle_cbor_cancel\n");
+  if (fido2_context.state != FIDO_OPERATIONAL_STATE_INIT) {
+    send_cbor_error(CTAP2_ERR_KEEPALIVE_CANCEL);
+  }
+  reset_fido_context();
+}
+
+void process_fido_message(void *msg) {
+  // process the message
+  rx_session_t *p_rx_session = (rx_session_t *)msg;
+
+  switch (p_rx_session->cmd) {
+    case U2FHID_PING:
+      u2fhid_ping(p_rx_session->buffer, p_rx_session->len);
+      break;
+    case U2FHID_INIT:
+      handle_init_cmd(p_rx_session);
+      break;
+    case U2FHID_MSG:
+      if (p_rx_session->len == 5) {
+        // lc2 lc3 = 0
+        p_rx_session->buffer[5] = p_rx_session->buffer[6] = 0;
+      }
+      handle_msg((APDU *)p_rx_session->buffer);
+      break;
+    case U2FHID_WINK:
+      u2fhid_wink(p_rx_session->buffer, p_rx_session->len);
+      break;
+    case U2FHID_CBOR:
+      handle_ctap_cbor_cmd(p_rx_session->buffer, p_rx_session->len);
+      break;
+    case U2FHID_CBOR_CANCEL:
+      handle_cbor_cancel();
+      break;
+    default:
+      send_u2fhid_error(p_rx_session->cid, ERR_INVALID_CMD);
+      break;
+  }
+}
+
+void fido_task(void *pvParameters) {
+  (void)pvParameters;
+  void *msg;
+  while (1) {
+    if (xQueueReceive(fido_msg_queue, &msg, pdMS_TO_TICKS(20)) == pdPASS) {
+      process_fido_message(msg);
+    } else {
+      if (fido2_context.state == FIDO_OPERATIONAL_STATE_WAIT_CONFIRM ||
+          fido2_context.state == FIDO_OPERATIONAL_STATE_SELECT_CREDENTIAL) {
+        key_msg_t key_msg;
+        if (xQueueReceive(cmd_key_msg_queue, &key_msg, 0) == pdPASS) {
+          if (key_msg.value == KEY_CONFIRM) {
+            if (fido2_context.cmd == CTAP_MAKE_CREDENTIAL) {
+              fido2_context.state = FIDO_OPERATIONAL_STATE_MAKE_CREDENTIAL;
+            } else if (fido2_context.cmd == CTAP_GET_ASSERTION) {
+              fido2_context.state = FIDO_OPERATIONAL_STATE_GET_ASSERTION;
+            }
+            xTimerStop(state_check_timer, 0);
+            layout_set_home();
+            rx_session_t *p_rx_session = &rx_session;
+            xQueueSend(fido_msg_queue, &p_rx_session, portMAX_DELAY);
+          } else if (key_msg.value == KEY_CANCEL) {
+            reset_fido_context();
+            ctap_error(CTAP2_ERR_OPERATION_DENIED);
+          } else if (key_msg.value == KEY_UP &&
+                     fido2_context.cmd == CTAP_GET_ASSERTION) {
+            ctap_assertion_select_credential(&fido2_context.data.ga, true);
+          } else if (key_msg.value == KEY_DOWN &&
+                     fido2_context.cmd == CTAP_GET_ASSERTION) {
+            ctap_assertion_select_credential(&fido2_context.data.ga, false);
+          }
+        }
+      }
+    }
+  }
+}
+#else
 void u2fhid_read(char tiny, const U2FHID_FRAME *f) {
   (void)tiny;
   // Always handle init packets directly
@@ -309,9 +968,9 @@ void u2fhid_read_start(const U2FHID_FRAME *f) {
       case U2FHID_WINK:
         u2fhid_wink(reader->buf, reader->len);
         break;
-      case U2FHID_CBOR:
-        ctap_cbor_cmd(reader->buf, reader->len);
-        break;
+      // case U2FHID_CBOR:
+      //   ctap_cbor_cmd(reader->buf, reader->len);
+      //   break;
       default:
         send_u2fhid_error(cid, ERR_INVALID_CMD);
         break;
@@ -597,7 +1256,7 @@ void u2fhid_msg(const APDU *a, uint32_t len) {
 
 void send_u2fhid_msg(const uint8_t cmd, const uint8_t *data,
                      const uint32_t len) {
-  if (len > U2F_MAXIMUM_PAYLOAD_LENGTH) {
+  if (len > FIDO_MAX_PAYLOAD_SIZE) {
     debugLog(0, "", "send_u2fhid_msg failed");
     return;
   }
@@ -637,7 +1296,6 @@ void send_u2fhid_msg(const uint8_t cmd, const uint8_t *data,
     debugLog(0, "", "send_u2fhid_msg is bad");
     debugInt(data + len - p);
   }
-  usb_u2f_data_send();
 }
 
 void send_u2fhid_error(uint32_t fcid, uint8_t err) {
@@ -1678,17 +2336,19 @@ void ble_u2f_msg(const APDU *a) {
       break;
   }
 }
-
+#endif
 void ctap_ble_msg(uint8_t *data, uint16_t len) {
-  if (data[0] == 0x00 || data[0] == 0x80) {
-    ble_u2f_msg((APDU *)data);
-    return;
-  } else {
-    if (dialog_is_busy()) {
-      return;
-    }
-    ctap_cbor_cmd(data, len);
-  }
+  (void)len;
+  (void)data;
+  // if (data[0] == 0x00 || data[0] == 0x80) {
+  //   ble_u2f_msg((APDU *)data);
+  //   return;
+  // } else {
+  //   if (dialog_is_busy()) {
+  //     return;
+  //   }
+  //   ctap_cbor_cmd(data, len);
+  // }
 }
 
 void ctap_ble_cmd(void) {
@@ -1703,15 +2363,12 @@ void ctap_ble_cmd(void) {
   }
 
   transport_type = TRANSPORT_BLE;
-  poll_nest++;
 
   if (data_len + 3 != ble_fido_data_len) {
     send_u2fhid_error(cid, ERR_INVALID_LEN);
     transport_type = TRANSPORT_NULL;
     return;
   }
-
-  protectAbortedByFIDO = true;
 
   ctap_printf("ctap_ble_cmd cmd: %d\n", cmd);
   dump_hex1(NULL, data_ptr, data_len);
@@ -1725,9 +2382,5 @@ void ctap_ble_cmd(void) {
       break;
     default:
       break;
-  }
-  poll_nest--;
-  if (poll_nest == 0) {
-    transport_type = TRANSPORT_NULL;
   }
 }

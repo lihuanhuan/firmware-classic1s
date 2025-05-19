@@ -58,4 +58,6 @@ void usbFlush(uint32_t millis);
 
 void usb_u2f_data_send(void);
 
+void usb_poll(void);
+
 #endif

@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <vendor/libopencm3/include/libopencmsis/core_cm3.h>
+
 #include "aes/aes.h"
 #include "bip32.h"
 #include "cardano.h"
@@ -86,6 +88,8 @@ typedef struct {
   bool se_init_state;
   bool se_pin_unlocked_state_cache;
   bool se_pin_unlocked_state;
+  bool se_has_pin_cache;
+  bool se_has_pin;
 } se_state_cache_t;
 
 se_state_cache_t se_state_cache = {0};
@@ -99,8 +103,22 @@ static void xor_cal(uint8_t *data1, uint8_t *data2, uint16_t len,
   }
 }
 
+static int irq_nest = 0;
+
 void se_set_ui_callback(UI_WAIT_CALLBACK callback) { ui_callback = callback; }
 UI_WAIT_CALLBACK se_get_ui_callback(void) { return ui_callback; }
+
+secbool se_transmit(uint8_t *cmd, uint16_t len, uint8_t *resp,
+                       uint16_t *resp_len) {
+  __disable_irq();
+  irq_nest++;
+  bool ret = thd89_transmit(cmd, len, resp, resp_len);
+  irq_nest--;
+  if (irq_nest == 0) {
+    __enable_irq();
+  }
+  return ret;
+}
 
 secbool se_get_rand(uint8_t *rand, uint16_t rand_len) {
   uint8_t rand_cmd[7] = {0x00, 0x84, 0x00, 0x00, 0x02};
@@ -108,14 +126,14 @@ secbool se_get_rand(uint8_t *rand, uint16_t rand_len) {
 
   rand_cmd[5] = (rand_len >> 8) & 0xff;
   rand_cmd[6] = rand_len & 0xff;
-  return thd89_transmit(rand_cmd, sizeof(rand_cmd), rand, &resp_len);
+  return se_transmit(rand_cmd, sizeof(rand_cmd), rand, &resp_len);
 }
 
 secbool se_reset_se(void) {
   uint8_t cmd[5] = {0x00, 0xF0, 0x00, 0x00, 0x00};
   uint16_t resp_len;
 
-  return thd89_transmit(cmd, sizeof(cmd), NULL, &resp_len);
+  return se_transmit(cmd, sizeof(cmd), NULL, &resp_len);
 }
 
 static void cal_mac(uint8_t *data, uint32_t len, uint8_t *mac) {
@@ -144,7 +162,7 @@ static void cal_mac(uint8_t *data, uint32_t len, uint8_t *mac) {
   memcpy(mac, mac_buf, 4);
 }
 
-secbool se_transmit_mac(uint8_t ins, uint8_t p1, uint8_t p2, uint8_t *data,
+secbool _se_transmit_mac(uint8_t ins, uint8_t p1, uint8_t p2, uint8_t *data,
                         uint16_t data_len, uint8_t *recv, uint16_t *recv_len) {
   uint8_t mac[4], iv_random[16];
   uint16_t pad_len;
@@ -196,7 +214,7 @@ secbool se_transmit_mac(uint8_t ins, uint8_t p1, uint8_t p2, uint8_t *data,
     data_len = 5;
   }
   se_recv_len = sizeof(se_recv_buffer);
-  if (!thd89_transmit(APDU, data_len, se_recv_buffer, &se_recv_len)) {
+  if (!se_transmit(APDU, data_len, se_recv_buffer, &se_recv_len)) {
     memset(APDU, 0x00, sizeof(APDU));
     return secfalse;
   }
@@ -246,6 +264,18 @@ secbool se_transmit_mac(uint8_t ins, uint8_t p1, uint8_t p2, uint8_t *data,
   return sectrue;
 }
 
+secbool se_transmit_mac(uint8_t ins, uint8_t p1, uint8_t p2, uint8_t *data,
+                        uint16_t data_len, uint8_t *recv, uint16_t *recv_len) {
+  __disable_irq();
+  irq_nest++;
+  bool ret = _se_transmit_mac(ins, p1, p2, data, data_len, recv, recv_len);
+  irq_nest--;
+  if (irq_nest == 0) {
+    __enable_irq();
+  }
+  return ret;
+}
+
 secbool se_random_encrypted(uint8_t *rand, uint16_t len) {
   uint8_t data[2];
   uint16_t recv_len = len;
@@ -264,7 +294,7 @@ secbool se_random_encrypted_ex(uint8_t *rand, uint16_t len) {
   uint8_t pad_len;
   cmd[5] = (len >> 8) & 0xff;
   cmd[6] = len & 0xff;
-  if (!thd89_transmit(cmd, sizeof(cmd), se_recv_buffer, &recv_len)) {
+  if (!se_transmit(cmd, sizeof(cmd), se_recv_buffer, &recv_len)) {
     return secfalse;
   }
 
@@ -340,7 +370,7 @@ secbool se_sync_session_key(void) {
   memcpy(sync_cmd + 5, r1, 16);
   memcpy(sync_cmd + 5 + 16, r2_enc, 16);
   memcpy(sync_cmd + 5 + 32, pubkey_tmp + 1, 64);
-  if (!thd89_transmit(sync_cmd, sizeof(sync_cmd), signature, &recv_len)) {
+  if (!se_transmit(sync_cmd, sizeof(sync_cmd), signature, &recv_len)) {
     return secfalse;
   }
   if (recv_len != 64) {
@@ -391,7 +421,7 @@ secbool se_sync_session_key_old(void) {
   aes_ecb_encrypt(r1, data_buf + 32, sizeof(r1), &en_ctxe);
   // send data1 + data2 to se and recv returned result
   memcpy(sync_cmd + 5, data_buf, 48);
-  if (!thd89_transmit(sync_cmd, sizeof(sync_cmd), data_buf, &recv_len)) {
+  if (!se_transmit(sync_cmd, sizeof(sync_cmd), data_buf, &recv_len)) {
     memset(se_session_key, 0x00, SESSION_KEYLEN);
     return secfalse;
   }
@@ -450,6 +480,11 @@ secbool se_reset_storage(void) {
   if (!se_transmit_mac(0xE1, 0x00, 0x00, rand, sizeof(rand), NULL, NULL)) {
     return secfalse;
   }
+  se_state_cache.se_pin_unlocked_state_cache = true;
+  se_state_cache.se_pin_unlocked_state = true;
+
+  se_state_cache.se_has_pin_cache = false;
+  se_state_cache.se_has_pin = false;
   return sectrue;
 }
 
@@ -461,7 +496,7 @@ secbool se_set_sn(const char *serial, uint8_t len) {
   }
   cmd[4] = len;
   memcpy(cmd + 5, serial, len);
-  return thd89_transmit(cmd, len + 5, NULL, &resp_len);
+  return se_transmit(cmd, len + 5, NULL, &resp_len);
 }
 
 secbool se_get_sn(char **serial) {
@@ -469,7 +504,7 @@ secbool se_get_sn(char **serial) {
   static char sn[32] = {0};
   uint16_t sn_len = sizeof(sn);
 
-  if (!thd89_transmit(get_sn, sizeof(get_sn), (uint8_t *)sn, &sn_len)) {
+  if (!se_transmit(get_sn, sizeof(get_sn), (uint8_t *)sn, &sn_len)) {
     return secfalse;
   }
   if (sn_len > sizeof(sn)) {
@@ -484,7 +519,7 @@ char *se_get_version(void) {
   static char ver[8] = {0};
   uint16_t ver_len = sizeof(ver);
 
-  if (!thd89_transmit(get_ver, sizeof(get_ver), (uint8_t *)ver, &ver_len)) {
+  if (!se_transmit(get_ver, sizeof(get_ver), (uint8_t *)ver, &ver_len)) {
     return NULL;
   }
 
@@ -496,7 +531,7 @@ char *se_get_build_id(void) {
   static char build_id[8] = {0};
   uint16_t len = sizeof(build_id);
 
-  if (!thd89_transmit(get_build_id, sizeof(get_build_id), (uint8_t *)build_id,
+  if (!se_transmit(get_build_id, sizeof(get_build_id), (uint8_t *)build_id,
                       &len)) {
     return NULL;
   }
@@ -509,7 +544,7 @@ char *se_get_hash(void) {
   static char hash[32] = {0};
   uint16_t len = 32;
 
-  if (!thd89_transmit(get_hash, sizeof(get_hash), (uint8_t *)hash, &len)) {
+  if (!se_transmit(get_hash, sizeof(get_hash), (uint8_t *)hash, &len)) {
     return NULL;
   }
 
@@ -519,18 +554,18 @@ char *se_get_hash(void) {
 secbool se_get_pubkey(uint8_t *public_key) {
   uint8_t cmd[5] = {0x00, 0xF5, 0x00, 0x01, 0x00};
   uint16_t resp_len = 64;
-  return thd89_transmit(cmd, sizeof(cmd), public_key, &resp_len);
+  return se_transmit(cmd, sizeof(cmd), public_key, &resp_len);
 }
 
 secbool se_get_ecdh_pubkey(uint8_t *key) {
   uint8_t cmd[6] = {0x00, 0xF5, 0x00, 0x05, 0x01, 0x01};
   uint16_t resp_len = 64;
-  return thd89_transmit(cmd, sizeof(cmd), key, &resp_len);
+  return se_transmit(cmd, sizeof(cmd), key, &resp_len);
 }
 
 secbool se_lock_ecdh_pubkey(void) {
   uint8_t cmd[6] = {0x00, 0xF5, 0x00, 0x05, 0x01, 0x02};
-  return thd89_transmit(cmd, sizeof(cmd), NULL, NULL);
+  return se_transmit(cmd, sizeof(cmd), NULL, NULL);
 }
 
 secbool se_write_certificate(const uint8_t *cert, uint16_t len) {
@@ -547,12 +582,12 @@ secbool se_write_certificate(const uint8_t *cert, uint16_t len) {
     cmd_len = 5;
   }
   memcpy(cmd + cmd_len, cert, len);
-  return thd89_transmit(cmd, cmd_len + len, NULL, &resp_len);
+  return se_transmit(cmd, cmd_len + len, NULL, &resp_len);
 }
 
 secbool se_read_certificate(uint8_t *cert, uint16_t *len) {
   uint8_t cmd[5] = {0x00, 0xF5, 0x00, 0x02, 0x00};
-  return thd89_transmit(cmd, 5, cert, (uint16_t *)len);
+  return se_transmit(cmd, 5, cert, (uint16_t *)len);
 }
 
 secbool se_has_cerrificate(void) {
@@ -573,7 +608,7 @@ secbool se_sign_message(uint8_t *msg, uint32_t msg_len, uint8_t *signature) {
   sha256_Final(&ctx, result);
 
   memcpy(sign + 5, result, 32);
-  return thd89_transmit(sign, sizeof(sign), signature, &signature_len);
+  return se_transmit(sign, sizeof(sign), signature, &signature_len);
 }
 
 secbool se_sign_message_feitian(uint8_t *msg, uint32_t msg_len,
@@ -586,7 +621,7 @@ secbool se_sign_message_feitian(uint8_t *msg, uint32_t msg_len,
   }
 
   memcpy(sign + 5, msg, 32);
-  return thd89_transmit(sign, sizeof(sign), signature, &signature_len);
+  return se_transmit(sign, sizeof(sign), signature, &signature_len);
 }
 
 secbool se_set_private_key_feitian(uint8_t *key) {
@@ -594,14 +629,14 @@ secbool se_set_private_key_feitian(uint8_t *key) {
   uint16_t signature_len = 64;
 
   memcpy(sign + 5, key, 32);
-  return thd89_transmit(sign, sizeof(sign), NULL, &signature_len);
+  return se_transmit(sign, sizeof(sign), NULL, &signature_len);
 }
 
 secbool se_set_session_key(const uint8_t *session_key) {
   uint8_t cmd[32] = {0x00, 0xF6, 0x00, 0x02, 0x10};
   uint16_t resp_len = 0;
   memcpy(cmd + 5, session_key, SESSION_KEYLEN);
-  return thd89_transmit(cmd, 21, NULL, &resp_len);
+  return se_transmit(cmd, 21, NULL, &resp_len);
 }
 
 secbool se_isInitialized(void) {
@@ -611,7 +646,7 @@ secbool se_isInitialized(void) {
   uint8_t cmd[5] = {0x00, 0xf8, 0x00, 00, 0x00};
   uint8_t init = 0xff;
   uint16_t len = sizeof(init);
-  if (!thd89_transmit(cmd, sizeof(cmd), &init, &len)) {
+  if (!se_transmit(cmd, sizeof(cmd), &init, &len)) {
     return secfalse;
   }
   se_state_cache.se_init_state = (init == 0x55);
@@ -623,12 +658,18 @@ secbool se_hasPin(void) {
   uint8_t hasPin = 0xff;
   uint16_t len = sizeof(hasPin);
 
+  if (se_state_cache.se_has_pin_cache) {
+    return se_state_cache.se_has_pin ? sectrue : secfalse;
+  }
+
   if (!se_transmit_mac(SE_INS_PIN, 0x00, 0x00, NULL, 0, &hasPin, &len)) {
     return secfalse;
   }
 
   // 0x55 exist ,0xff not
-  return sectrue * (hasPin == 0x55);
+  se_state_cache.se_has_pin = (hasPin == 0x55);
+  se_state_cache.se_has_pin_cache = true;
+  return se_state_cache.se_has_pin ? sectrue : secfalse;
 }
 
 secbool se_verifyPin(const char *pin) {
@@ -659,6 +700,8 @@ secbool se_setPin(const char *pin) {
     return secfalse;
   }
   memset(pin_buf, 0, sizeof(pin_buf));
+  se_state_cache.se_has_pin_cache = true;
+  se_state_cache.se_has_pin = true;
   return sectrue;
 }
 
@@ -676,6 +719,9 @@ secbool se_changePin(const char *oldpin, const char *newpin) {
     return secfalse;
   }
   memset(pin_buff, 0, sizeof(pin_buff));
+
+  se_state_cache.se_has_pin_cache = true;
+  se_state_cache.se_has_pin = true;
   return sectrue;
 }
 
@@ -730,7 +776,7 @@ secbool se_set_u2f_counter(uint32_t u2fcounter) {
 
   memcpy(cmd + 5, &u2fcounter, 4);
 
-  if (!thd89_transmit(cmd, sizeof(cmd), NULL, &recv_len)) {
+  if (!se_transmit(cmd, sizeof(cmd), NULL, &recv_len)) {
     return secfalse;
   }
 
@@ -740,7 +786,7 @@ secbool se_set_u2f_counter(uint32_t u2fcounter) {
 secbool se_get_u2f_next_counter(uint32_t *u2fcounter) {
   uint8_t cmd[5] = {0x00, SE_INS_FIDO, 0x00, SE_FIDO_NEXT_COUNTER, 0x00};
   uint16_t recv_len = 4;
-  if (!thd89_transmit(cmd, sizeof(cmd), (uint8_t *)u2fcounter, &recv_len)) {
+  if (!se_transmit(cmd, sizeof(cmd), (uint8_t *)u2fcounter, &recv_len)) {
     return secfalse;
   }
   return sectrue;
@@ -1108,7 +1154,7 @@ secbool session_generate_seed_percent(uint8_t *percent) {
   uint16_t recv_len = 0;
   uint16_t sw1sw2;
 
-  if (!thd89_transmit(cmd, sizeof(cmd), NULL, &recv_len)) {
+  if (!se_transmit(cmd, sizeof(cmd), NULL, &recv_len)) {
     sw1sw2 = thd89_last_error();
     if ((sw1sw2 & 0xff00) == 0x6c00) {
       *percent = sw1sw2 & 0xff;
@@ -1560,7 +1606,7 @@ bool se_isFactoryMode(void) {
   uint8_t cmd[5] = {0x00, 0xf8, 0x04, 0x00, 0x00};
   uint8_t flag = 0xff;
   uint16_t len = sizeof(flag);
-  if (!thd89_transmit(cmd, sizeof(cmd), &flag, &len)) {
+  if (!se_transmit(cmd, sizeof(cmd), &flag, &len)) {
     return false;
   }
   return flag == 0x00;
@@ -1568,10 +1614,20 @@ bool se_isFactoryMode(void) {
 
 bool se_disableFactoryMode(void) {
   uint8_t cmd[5] = {0x00, 0xf8, 0x03, 0x00, 0x00};
-  if (!thd89_transmit(cmd, sizeof(cmd), NULL, NULL)) {
+  if (!se_transmit(cmd, sizeof(cmd), NULL, NULL)) {
     return false;
   }
   return true;
+}
+
+static bool se_fido_seed_cached = false;
+
+bool se_fido_get_seed_cached(void) {
+  return se_fido_seed_cached;
+}
+
+void se_fido_set_seed_cached(bool cached) {
+  se_fido_seed_cached = cached;
 }
 
 secbool se_gen_root_node(uint8_t *percent) {
@@ -1579,7 +1635,7 @@ secbool se_gen_root_node(uint8_t *percent) {
   uint16_t recv_len = 0;
   uint16_t sw1sw2;
 
-  if (!thd89_transmit(cmd, sizeof(cmd), NULL, &recv_len)) {
+  if (!se_transmit(cmd, sizeof(cmd), NULL, &recv_len)) {
     sw1sw2 = thd89_last_error();
     if ((sw1sw2 & 0xff00) == 0x6c00) {
       *percent = sw1sw2 & 0xff;
@@ -1602,7 +1658,7 @@ secbool se_u2f_register(const uint8_t app_id[32], const uint8_t challenge[32],
   memcpy(cmd + 5 + 32, challenge, 32);
 
   cmd[4] = 64;
-  if (!thd89_transmit(cmd, 5 + 64, (uint8_t *)recv, &recv_len)) {
+  if (!se_transmit(cmd, 5 + 64, (uint8_t *)recv, &recv_len)) {
     return secfalse;
   }
 
@@ -1623,7 +1679,7 @@ secbool se_u2f_validate_handle(const uint8_t app_id[32],
   memcpy(cmd + 5 + 32, key_handle, 64);
 
   cmd[4] = 96;
-  if (!thd89_transmit(cmd, 5 + 96, NULL, NULL)) {
+  if (!se_transmit(cmd, 5 + 96, NULL, NULL)) {
     return secfalse;
   }
   return sectrue;
@@ -1641,7 +1697,7 @@ secbool se_u2f_authenticate(const uint8_t app_id[32],
   memcpy(cmd + 5 + 32 + 64, challenge, 32);
 
   cmd[4] = 128;
-  if (!thd89_transmit(cmd, 5 + 128, (uint8_t *)recv, &recv_len)) {
+  if (!se_transmit(cmd, 5 + 128, (uint8_t *)recv, &recv_len)) {
     return secfalse;
   }
 
@@ -1681,7 +1737,7 @@ secbool se_derive_fido_keys(HDNode *out, const char *curve,
 
   cmd[4] = len;
 
-  if (!thd89_transmit(cmd, 5 + len, (uint8_t *)resp, &resp_len)) {
+  if (!se_transmit(cmd, 5 + len, (uint8_t *)resp, &resp_len)) {
     return secfalse;
   }
   out->curve = get_curve_by_name(curve);
@@ -1700,7 +1756,7 @@ secbool se_fido_hdnode_sign_digest(const uint8_t *hash, uint8_t *sig) {
 
   memcpy(cmd + 5, hash, 32);
 
-  if (!thd89_transmit(cmd, 37, (uint8_t *)resp, &resp_len)) {
+  if (!se_transmit(cmd, 37, (uint8_t *)resp, &resp_len)) {
     return secfalse;
   }
   memcpy(sig, resp, resp_len);
@@ -1714,7 +1770,7 @@ secbool se_fido_att_sign_digest(const uint8_t *hash, uint8_t *sig) {
 
   memcpy(cmd + 5, hash, 32);
 
-  if (!thd89_transmit(cmd, 37, (uint8_t *)resp, &resp_len)) {
+  if (!se_transmit(cmd, 37, (uint8_t *)resp, &resp_len)) {
     return secfalse;
   }
   memcpy(sig, resp, resp_len);

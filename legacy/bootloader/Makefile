@@ -3,6 +3,8 @@ BOOT_BUILD_DATE=$(shell date "+%m%d")
 BUILD_COMMIT=$(shell git rev-parse HEAD | cut -c1-7)
 NAME  = classic1s_bootloader.$(BOOT_BUILD_VERSION)-Stable-$(BOOT_BUILD_DATE)-$(BUILD_COMMIT)
 
+OBJS += ../supervise.o
+OBJS += ../timer.o
 OBJS += startup.o
 OBJS += bootloader.o
 OBJS += usb.o

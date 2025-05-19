@@ -10,7 +10,7 @@ SECTIONS
 {
 	.confidential (NOLOAD) : {
 		*(confidential)
-		ASSERT ((SIZEOF(.confidential) <= 32K), "Error: Confidential section too big!");
+		ASSERT ((SIZEOF(.confidential) <= 8K), "Error: Confidential section too big!");
 	} >ram
 	
 	/* C++ Static constructors/destructors, also used for __attribute__
@@ -32,7 +32,7 @@ SECTIONS
 INCLUDE cortex-m-generic.ld
 
 _codelen = SIZEOF(.text) + SIZEOF(.data) + SIZEOF(.ARM.exidx);
-ASSERT((end + 95K <= ORIGIN(ram) + LENGTH(ram)), "Error: not enough space for stack!");
+ASSERT((end + 16K <= ORIGIN(ram) + LENGTH(ram)), "Error: not enough space for stack!");
 _ram_start = ORIGIN(ram);
 _ram_end = ORIGIN(ram) + LENGTH(ram);
 _stay_in_bootloader_flag_addr = ABSOLUTE(0x20010000);

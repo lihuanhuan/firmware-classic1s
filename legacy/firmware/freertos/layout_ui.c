@@ -11,7 +11,10 @@
 
 #define TIMER1S_PERIOD pdMS_TO_TICKS(1000)
 
-void layout_ui_home(void) { layoutHome(); }
+void layout_ui_home(void) { 
+  set_key_state(KEY_STATE_UI);
+  layoutHome(); 
+}
 
 void layout_ui_status_bar(void) { layoutStatusLogoEx(true); }
 
@@ -68,4 +71,10 @@ void layout_ui_pin_error(bool retry) {
                                 NULL, NULL, desc);
     key_wait_for_exit(0);
   }
+}
+
+void layout_ui_dialog(layout_ui_dialog_t *dialog) {
+  layoutDialogCenterAdapterV2(dialog->title, NULL, NULL, NULL, NULL, NULL,
+                              dialog->line1, dialog->line2, dialog->line3,
+                              dialog->line4, dialog->desc);
 }

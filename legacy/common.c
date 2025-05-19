@@ -97,11 +97,12 @@ void hal_delay(uint32_t ms) {
 #if EMULATOR
   usleep(ms * 1000);
 #else
-  uint32_t start = timer_ms();
+  // uint32_t start = timer_ms();
 
-  while ((timer_ms() - start) < ms) {
-    asm("nop");
-  }
+  // while ((timer_ms() - start) < ms) {
+  //   asm("nop");
+  // }
+  delay_ms(ms);
 #endif
 }
 

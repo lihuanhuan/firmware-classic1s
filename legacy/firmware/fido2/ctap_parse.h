@@ -31,8 +31,7 @@ uint8_t parse_options(CborValue *val, uint8_t *rk, uint8_t *uv, uint8_t *up);
 uint8_t parse_allow_list(CTAP_getAssertion *GA, CborValue *it);
 uint8_t parse_cose_key(CborValue *it, COSE_key *cose);
 
-uint8_t ctap_parse_make_credential(CTAP_makeCredential *MC,
-                                   CborEncoder *encoder, uint8_t *request,
+uint8_t ctap_parse_make_credential(CTAP_makeCredential *MC, uint8_t *request,
                                    int length);
 uint8_t ctap_parse_get_assertion(CTAP_getAssertion *GA, uint8_t *request,
                                  int length);

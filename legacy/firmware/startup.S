@@ -38,6 +38,8 @@ reset_handler:
 
   ldr sp, =_stack  // setup stack
 
+  bl systick_counter_disable
+
   // are we privileged? if so, fix VTOR, otherwise skip
   mrs r3, control
   and r3, r3, #1

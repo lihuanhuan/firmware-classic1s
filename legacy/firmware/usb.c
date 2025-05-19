@@ -46,6 +46,9 @@
 #include "webusb.h"
 #include "winusb.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #define USB_INTERFACE_INDEX_MAIN 0
 #if DEBUG_LINK
 #define USB_INTERFACE_INDEX_DEBUG 1
@@ -57,8 +60,8 @@
 #endif
 #else
 #if U2F_ENABLED
-#define USB_INTERFACE_INDEX_U2F 1
-#define USB_INTERFACE_COUNT 2
+#define USB_INTERFACE_INDEX_U2F 0
+#define USB_INTERFACE_COUNT 1
 #else
 #define USB_INTERFACE_COUNT 1
 #endif
@@ -71,14 +74,14 @@
 #define ENDPOINT_ADDRESS_DEBUG_OUT (0x02)
 #endif
 #if U2F_ENABLED
-#define ENDPOINT_ADDRESS_U2F_IN (0x83)
-#define ENDPOINT_ADDRESS_U2F_OUT (0x03)
+#define ENDPOINT_ADDRESS_U2F_IN (0x81)
+#define ENDPOINT_ADDRESS_U2F_OUT (0x01)
 #endif
 
 #define USB_STRINGS                                 \
   X(MANUFACTURER, "ByteForge")                      \
   X(PRODUCT, "ONEKEY CLASSIC")                      \
-  X(SERIAL_NUMBER, config_uuid_str)                 \
+  X(SERIAL_NUMBER, "00000000")                      \
   X(INTERFACE_MAIN, "ONEKEY Interface")             \
   X(INTERFACE_DEBUG, "ONEKEY Debug Link Interface") \
   X(INTERFACE_U2F, "ONEKEY U2F Interface")
@@ -100,7 +103,7 @@ static const char *usb_strings[] = {USB_STRINGS};
 static struct usb_device_descriptor dev_descr = {
     .bLength = USB_DT_DEVICE_SIZE,
     .bDescriptorType = USB_DT_DEVICE,
-    .bcdUSB = 0x0210,
+    .bcdUSB = 0x0200,
     .bDeviceClass = 0,
     .bDeviceSubClass = 0,
     .bDeviceProtocol = 0,
@@ -227,57 +230,60 @@ static const struct usb_interface_descriptor webusb_iface_debug[] = {{
 
 #endif
 
-static const struct usb_endpoint_descriptor webusb_endpoints_main[2] = {
-    {
-        .bLength = USB_DT_ENDPOINT_SIZE,
-        .bDescriptorType = USB_DT_ENDPOINT,
-        .bEndpointAddress = ENDPOINT_ADDRESS_MAIN_IN,
-        .bmAttributes = USB_ENDPOINT_ATTR_INTERRUPT,
-        .wMaxPacketSize = USB_PACKET_SIZE,
-        .bInterval = 1,
-    },
-    {
-        .bLength = USB_DT_ENDPOINT_SIZE,
-        .bDescriptorType = USB_DT_ENDPOINT,
-        .bEndpointAddress = ENDPOINT_ADDRESS_MAIN_OUT,
-        .bmAttributes = USB_ENDPOINT_ATTR_INTERRUPT,
-        .wMaxPacketSize = USB_PACKET_SIZE,
-        .bInterval = 1,
-    }};
+// static const struct usb_endpoint_descriptor webusb_endpoints_main[2] = {
+//     {
+//         .bLength = USB_DT_ENDPOINT_SIZE,
+//         .bDescriptorType = USB_DT_ENDPOINT,
+//         .bEndpointAddress = ENDPOINT_ADDRESS_MAIN_IN,
+//         .bmAttributes = USB_ENDPOINT_ATTR_INTERRUPT,
+//         .wMaxPacketSize = USB_PACKET_SIZE,
+//         .bInterval = 1,
+//     },
+//     {
+//         .bLength = USB_DT_ENDPOINT_SIZE,
+//         .bDescriptorType = USB_DT_ENDPOINT,
+//         .bEndpointAddress = ENDPOINT_ADDRESS_MAIN_OUT,
+//         .bmAttributes = USB_ENDPOINT_ATTR_INTERRUPT,
+//         .wMaxPacketSize = USB_PACKET_SIZE,
+//         .bInterval = 1,
+//     }};
 
-static const struct usb_interface_descriptor webusb_iface_main[] = {{
-    .bLength = USB_DT_INTERFACE_SIZE,
-    .bDescriptorType = USB_DT_INTERFACE,
-    .bInterfaceNumber = USB_INTERFACE_INDEX_MAIN,
-    .bAlternateSetting = 0,
-    .bNumEndpoints = 2,
-    .bInterfaceClass = USB_CLASS_VENDOR,
-    .bInterfaceSubClass = 0,
-    .bInterfaceProtocol = 0,
-    .iInterface = USB_STRING_INTERFACE_MAIN,
-    .endpoint = webusb_endpoints_main,
-    .extra = NULL,
-    .extralen = 0,
-}};
+// static const struct usb_interface_descriptor webusb_iface_main[] = {{
+//     .bLength = USB_DT_INTERFACE_SIZE,
+//     .bDescriptorType = USB_DT_INTERFACE,
+//     .bInterfaceNumber = USB_INTERFACE_INDEX_MAIN,
+//     .bAlternateSetting = 0,
+//     .bNumEndpoints = 2,
+//     .bInterfaceClass = USB_CLASS_VENDOR,
+//     .bInterfaceSubClass = 0,
+//     .bInterfaceProtocol = 0,
+//     .iInterface = USB_STRING_INTERFACE_MAIN,
+//     .endpoint = webusb_endpoints_main,
+//     .extra = NULL,
+//     .extralen = 0,
+// }};
 
 // Windows are strict about interfaces appearing
 // in correct order
 static const struct usb_interface ifaces[] = {
-    {
-        .num_altsetting = 1,
-        .altsetting = webusb_iface_main,
-#if DEBUG_LINK
-    },
-    {
-        .num_altsetting = 1,
-        .altsetting = webusb_iface_debug,
-#endif
-#if U2F_ENABLED
-    },
+    //         .num_altsetting = 1,
+    //         .altsetting = webusb_iface_main,
+    // #if DEBUG_LINK
+    //     },
+    //     {
+    //         .num_altsetting = 1,
+    //         .altsetting = webusb_iface_debug,
+    // #endif
+    // #if U2F_ENABLED
+    //     },
+    //     {
+    //         .num_altsetting = 1,
+    //         .altsetting = hid_iface_u2f,
+    // #endif
+    //     }
     {
         .num_altsetting = 1,
         .altsetting = hid_iface_u2f,
-#endif
     }};
 
 static const struct usb_config_descriptor config = {
@@ -314,10 +320,11 @@ static enum usbd_request_return_codes hid_control_request(
   return 1;
 }
 
+#include "usart.h"
+
 static void u2f_rx_callback(usbd_device *dev, uint8_t ep) {
   (void)ep;
   static CONFIDENTIAL uint8_t buf[USB_PACKET_SIZE] __attribute__((aligned(4)));
-
   if (dev != NULL) {
     if (usbd_ep_read_packet(dev, ENDPOINT_ADDRESS_U2F_OUT, buf, sizeof(buf)) !=
         USB_PACKET_SIZE)
@@ -331,7 +338,7 @@ static void u2f_rx_callback(usbd_device *dev, uint8_t ep) {
 
 #endif
 
-static void main_rx_callback(usbd_device *dev, uint8_t ep) {
+void main_rx_callback(usbd_device *dev, uint8_t ep) {
   (void)ep;
   static CONFIDENTIAL uint8_t buf[64] __attribute__((aligned(4)));
   if (dev != NULL) {
@@ -374,10 +381,10 @@ static void debug_rx_callback(usbd_device *dev, uint8_t ep) {
 static void set_config(usbd_device *dev, uint16_t wValue) {
   (void)wValue;
 
-  usbd_ep_setup(dev, ENDPOINT_ADDRESS_MAIN_IN, USB_ENDPOINT_ATTR_INTERRUPT,
-                USB_PACKET_SIZE, 0);
-  usbd_ep_setup(dev, ENDPOINT_ADDRESS_MAIN_OUT, USB_ENDPOINT_ATTR_INTERRUPT,
-                USB_PACKET_SIZE, main_rx_callback);
+  // usbd_ep_setup(dev, ENDPOINT_ADDRESS_MAIN_IN, USB_ENDPOINT_ATTR_INTERRUPT,
+  //               USB_PACKET_SIZE, 0);
+  // usbd_ep_setup(dev, ENDPOINT_ADDRESS_MAIN_OUT, USB_ENDPOINT_ATTR_INTERRUPT,
+  //               USB_PACKET_SIZE, main_rx_callback);
 #if U2F_ENABLED
   usbd_ep_setup(dev, ENDPOINT_ADDRESS_U2F_IN, USB_ENDPOINT_ATTR_INTERRUPT,
                 USB_PACKET_SIZE, 0);
@@ -400,46 +407,46 @@ static void set_config(usbd_device *dev, uint16_t wValue) {
 static usbd_device *usbd_dev = NULL;
 static uint8_t usbd_control_buffer[256] __attribute__((aligned(2)));
 
-static const struct usb_device_capability_descriptor *capabilities[] = {
-    (const struct usb_device_capability_descriptor
-         *)&webusb_platform_capability_descriptor_no_landing,
-};
+// static const struct usb_device_capability_descriptor *capabilities[] = {
+//     (const struct usb_device_capability_descriptor
+//          *)&webusb_platform_capability_descriptor_no_landing,
+// };
 
-static const struct usb_bos_descriptor bos_descriptor = {
-    .bLength = USB_DT_BOS_SIZE,
-    .bDescriptorType = USB_DT_BOS,
-    .bNumDeviceCaps = sizeof(capabilities) / sizeof(capabilities[0]),
-    .capabilities = capabilities};
+// static const struct usb_bos_descriptor bos_descriptor = {
+//     .bLength = USB_DT_BOS_SIZE,
+//     .bDescriptorType = USB_DT_BOS,
+//     .bNumDeviceCaps = sizeof(capabilities) / sizeof(capabilities[0]),
+//     .capabilities = capabilities};
 
 void usbInit(void) {
-  bool trezor_comp_mode = false;
-  if (!config_hasTrezorCompMode()) {
-    config_setTrezorCompMode(true);
-    trezor_comp_mode = true;
-  } else {
-    config_getTrezorCompMode(&trezor_comp_mode);
-  }
-  if (!config_hasUsblock()) {
-    config_setUsblock(true);
-  } else {
-    bool lock = false;
-    config_getUsblock(&lock, true);
-    config_setUsblock(lock);
-  }
+  // bool trezor_comp_mode = false;
+  // if (!config_hasTrezorCompMode()) {
+  //   config_setTrezorCompMode(true);
+  //   trezor_comp_mode = true;
+  // } else {
+  //   config_getTrezorCompMode(&trezor_comp_mode);
+  // }
+  // if (!config_hasUsblock()) {
+  //   config_setUsblock(true);
+  // } else {
+  //   bool lock = false;
+  //   config_getUsblock(&lock, true);
+  //   config_setUsblock(lock);
+  // }
   // dev_descr.idProduct = trezor_comp_mode ? 0x53c1 : 0x4F4B;
-  if (trezor_comp_mode) {
-    dev_descr.idProduct = 0x53c1;
-  }
+  // if (trezor_comp_mode) {
+  //   dev_descr.idProduct = 0x53c1;
+  // }
   usbd_dev = usbd_init(&otgfs_usb_driver_onekey, &dev_descr, &config,
                        usb_strings, sizeof(usb_strings) / sizeof(*usb_strings),
                        usbd_control_buffer, sizeof(usbd_control_buffer));
   usbd_register_set_config_callback(usbd_dev, set_config);
-  usb21_setup(usbd_dev, &bos_descriptor);
-  static const char *origin_url = "onekey.so";
-  webusb_setup(usbd_dev, origin_url);
+  // usb21_setup(usbd_dev, &bos_descriptor);
+  // static const char *origin_url = "onekey.so";
+  // webusb_setup(usbd_dev, origin_url);
   // Debug link interface does not have WinUSB set;
   // if you really need debug link on windows, edit the descriptor in winusb.c
-  winusb_setup(usbd_dev, USB_INTERFACE_INDEX_MAIN);
+  // winusb_setup(usbd_dev, USB_INTERFACE_INDEX_MAIN);
 }
 
 static void i2c_slave_poll(void) {
@@ -463,7 +470,7 @@ static void i2c_slave_poll(void) {
         memset(packet_buf, 0x00, sizeof(packet_buf));
         len = total_len > 64 ? 64 : total_len;
         fifo_read_lock(&i2c_fifo_in, packet_buf, len);
-        main_rx_callback(NULL, 0);
+        // main_rx_callback(NULL, 0);
       }
     }
   }
@@ -567,12 +574,20 @@ void usbPoll(void) {
 #endif
 }
 
-#if !BITCOIN_ONLY
+#include "usart.h"
+#include "task.h"
+
 void usb_u2f_data_send(void) {
   static const uint8_t *data;
+  taskENTER_CRITICAL();
   while (1) {
     data = u2f_out_data();
     if (data) {
+      // uart_printf("usb_u2f_data_send\n");
+      // for (int i = 0; i < USB_PACKET_SIZE; i++) {
+      //   uart_printf("%02X ", data[i]);
+      // }
+      // uart_printf("\n");
       while (usbd_ep_write_packet(usbd_dev, ENDPOINT_ADDRESS_U2F_IN, data,
                                   USB_PACKET_SIZE) != USB_PACKET_SIZE) {
       }
@@ -580,8 +595,9 @@ void usb_u2f_data_send(void) {
       break;
     }
   }
+  taskEXIT_CRITICAL();
 }
-#endif
+
 void usbReconnect(void) {
   if (usbd_dev != NULL) {
     usbd_disconnect(usbd_dev, 1);
@@ -630,5 +646,12 @@ void usbFlush(uint32_t millis) {
 
   while ((timer_ms() - start) < millis) {
     asm("nop");
+  }
+}
+
+void usb_poll(void) {
+  if (usbd_dev != NULL) {
+    usbd_poll(usbd_dev);
+    // usb_u2f_data_send();
   }
 }

@@ -24,16 +24,46 @@
 #include <stdint.h>
 #include "trezor.h"
 #include "u2f_hid.h"
-
+#include "ctap.h"
+#include "cbor.h"
 #define U2F_KEY_PATH 0x80553246
-
+#define U2F_OUT_PKT_BUFFER_LEN 130
 typedef struct {
   uint8_t cla, ins, p1, p2;
   uint8_t lc1, lc2, lc3;
   uint8_t data[];
 } APDU;
 
-#define U2F_OUT_PKT_BUFFER_LEN 130
+
+typedef enum {
+  HID_RECEIVE_STATE_IDLE,
+  HID_RECEIVE_STATE_RECEIVING
+}hid_receive_state_t;
+
+
+typedef enum{
+  FIDO_OPERATIONAL_STATE_INIT,
+  FIDO_OPERATIONAL_STATE_WAIT_PIN,
+  FIDO_OPERATIONAL_STATE_WAIT_SEED,
+  FIDO_OPERATIONAL_STATE_WAIT_CONFIRM,
+  FIDO_OPERATIONAL_STATE_MAKE_CREDENTIAL,
+  FIDO_OPERATIONAL_STATE_GET_ASSERTION,
+  FIDO_OPERATIONAL_STATE_SELECT_CREDENTIAL,
+  FIDO_OPERATIONAL_STATE_ASSERTION_FAILED,
+  FIDO_OPERATIONAL_STATE_RESET
+}fido_operational_state_t;
+
+typedef struct {
+  uint8_t *raw_data;
+  uint32_t raw_data_len;
+  uint8_t cmd;
+  union {
+    CTAP_makeCredential mc;
+    CTAP_getAssertion ga;
+  } data;
+  fido_operational_state_t state;
+} fido2_context_t;
+
 
 extern uint32_t u2f_out_end;
 extern uint8_t u2f_out_packets[U2F_OUT_PKT_BUFFER_LEN][HID_RPT_SIZE];
@@ -75,5 +105,7 @@ uint8_t *get_ble_fido_data_ptr(void);
 void set_ble_fido_data_len(uint16_t len);
 
 void ctap_error(uint8_t err);
+
+void process_fido_message(void *msg);
 
 #endif

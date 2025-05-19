@@ -100,6 +100,7 @@
 
 #define EXT_HMAC_SECRET_REQUESTED   0x01
 #define EXT_HMAC_SECRET_PARSED      0x02
+#define EXT_HMAC_SECRET_ERROR       0x03
 
 #define EXT_CRED_PROTECT_INVALID                0x00
 #define EXT_CRED_PROTECT_OPTIONAL               0x01
@@ -374,6 +375,11 @@ typedef struct
 
     CTAP_extensions extensions;
 
+    bool is_resident_credential;
+    uint8_t valid_cred_count;
+    uint8_t response_elements;
+    uint8_t user_verified;
+
 } CTAP_getAssertion;
 
 typedef struct
@@ -483,15 +489,30 @@ void ctap_load_external_keys(uint8_t * keybytes);
 #define ctap_printf(fmt, ...)
 #define dump_hex1(tag, data, len)
 #endif
+
+void ctap_reset_pin_consecutive_failures(void);
+
 char *get_account_name(CTAP_userEntity *user);
 uint8_t ctap_get_info(CborEncoder *cbor_encoder);
 uint8_t ctap_make_credential(CborEncoder *encoder, uint8_t *request,
                              int length);
+uint8_t ctap_make_credential_phrase_1(uint8_t *request, int length,
+                                      CTAP_makeCredential *MC);
+uint8_t ctap_make_credential_phrase_2(CborEncoder *encoder,
+                                      CTAP_makeCredential *MC);
 uint8_t ctap_get_assertion(CborEncoder *encoder, uint8_t *request, int length);
 
+uint8_t ctap_get_assertion_phrase_1(uint8_t *request, int length,
+                                    CTAP_getAssertion *GA);
+
+uint8_t ctap_get_assertion_phrase_2(CborEncoder *encoder,
+                                    CTAP_getAssertion *GA);
+void ctap_assertion_select_credential(CTAP_getAssertion *GA, bool up);
 uint8_t ctap_client_pin(CborEncoder *encoder, uint8_t *request, int length);
 
 int ctap_authenticate_credential_data(const uint8_t *rp_id_hash,
-                                      CTAP_credentialDescriptor *desc);
-
+                                      CTAP_credentialDescriptor *desc,
+                                      bool user_verified,
+                                      bool is_resident_credential);
+void ctap_reset_assertion_state(void);
 #endif
