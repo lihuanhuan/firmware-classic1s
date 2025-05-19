@@ -1,0 +1,12 @@
+#ifndef __TASK_HEADER_H__
+#define __TASK_HEADER_H__
+
+#include "FreeRTOSConfig.h"
+
+#define TASK_PRIORITY_HIGHEST (configMAX_PRIORITIES - 1)
+#define TASK_PRIORITY_HIGH (configMAX_PRIORITIES - 2)
+#define TASK_PRIORITY_MEDIUM (configMAX_PRIORITIES - 3)
+#define TASK_PRIORITY_LOW (configMAX_PRIORITIES - 4)
+#define TASK_PRIORITY_LOWEST (configMAX_PRIORITIES - 5)
+
+#endif

@@ -33,3 +33,6 @@
 [submodule "vendor/tiny_cbor"]
 	path = vendor/tiny_cbor
 	url = https://github.com/intel/tinycbor.git
+[submodule "vendor/freertos_kernel"]
+	path = vendor/freertos_kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
