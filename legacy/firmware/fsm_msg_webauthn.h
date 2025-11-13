@@ -203,6 +203,7 @@ void fsm_msgWebAuthnAddResidentCredential(
              rp_id_hash);
 
   if (!resident_credential_store(rp_id_hash, desc.credential.user.id,
+                                 desc.credential.user.id_size,
                                  desc.cred_id, desc.cred_id_len)) {
     fsm_sendFailure(FailureType_Failure_ProcessError,
                     "Failed to store resident credential");

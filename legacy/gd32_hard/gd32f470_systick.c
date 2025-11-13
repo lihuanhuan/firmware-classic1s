@@ -28,8 +28,48 @@ void gd32_systick_config(void) {
     while (1) {
     }
   }
-  /* configure the systick handler priority */
-  NVIC_SetPriority(SysTick_IRQn, 0x00U);
+  /* configure the systick handler priority - 设置为较低优先级 */
+  NVIC_SetPriority(SysTick_IRQn, 0x0FU);
+}
+
+/*!
+    \brief      disable systick interrupt
+    \param[in]  none
+    \param[out] none
+    \retval     none
+*/
+void gd32_systick_interrupt_disable(void) {
+  SysTick->CTRL &= ~SysTick_CTRL_TICKINT_Msk;
+}
+
+/*!
+    \brief      enable systick interrupt
+    \param[in]  none
+    \param[out] none
+    \retval     none
+*/
+void gd32_systick_interrupt_enable(void) {
+  SysTick->CTRL |= SysTick_CTRL_TICKINT_Msk;
+}
+
+/*!
+    \brief      disable systick counter
+    \param[in]  none
+    \param[out] none
+    \retval     none
+*/
+void gd32_systick_counter_disable(void) {
+  SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
+}
+
+/*!
+    \brief      enable systick counter
+    \param[in]  none
+    \param[out] none
+    \retval     none
+*/
+void gd32_systick_counter_enable(void) {
+  SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
 }
 
 /*!

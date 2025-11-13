@@ -9,7 +9,10 @@ typedef enum {
   UI_PAGE_HOME,
   UI_PAGE_MENU,
   UI_PAGE_PIN,
-  UI_PAGE_CMD
+  UI_PAGE_CMD,
+  UI_PAGE_RESET,
+  UI_PAGE_TRANSPORT_BLE,
+  UI_PAGE_TRANSPORT_USB,
 } ui_page_t;
 
 typedef enum {

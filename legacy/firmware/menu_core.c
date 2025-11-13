@@ -45,28 +45,28 @@ void menu_display(struct menu *menu) {
       continue;
     }
     strlcpy(descriptions[i + 3], _gettext(menu->items[index].name), 64);
-    if (menu->items[index].name2) {
-      if (0 == memcmp(menu->items[index].name2, "minutes", 7)) {
-        strlcpy(descriptions[i + 3], _(O__STR_MINUTES), 64);
-        bracket_replace(descriptions[i + 3], menu->items[index].name);
-      } else {
-        strcat(descriptions[i + 3], " ");
-        strcat(descriptions[i + 3], _gettext(menu->items[index].name2));
-      }
-    }
+    // if (menu->items[index].name2) {
+    //   if (0 == memcmp(menu->items[index].name2, "minutes", 7)) {
+    //     strlcpy(descriptions[i + 3], _(O__STR_MINUTES), 64);
+    //     bracket_replace(descriptions[i + 3], menu->items[index].name);
+    //   } else {
+    //     strcat(descriptions[i + 3], " ");
+    //     strcat(descriptions[i + 3], _gettext(menu->items[index].name2));
+    //   }
+    // }
   }
 
-  switch (menu->button_type) {
-    case BTN_TYPE_NEXT:
-      bmp_yes = &bmp_bottom_right_arrow;
-      text_yes = "Next";
-      break;
-    case BTN_TYPE_YES:
-    default:
-      bmp_yes = &bmp_bottom_right_confirm;
-      text_yes = "Okay";
-      break;
-  }
+  // switch (menu->button_type) {
+  //   case BTN_TYPE_NEXT:
+  //     bmp_yes = &bmp_bottom_right_arrow;
+  //     text_yes = "Next";
+  //     break;
+  //   case BTN_TYPE_YES:
+  //   default:
+  //     bmp_yes = &bmp_bottom_right_confirm;
+  //     text_yes = "Okay";
+  //     break;
+  // }
 
   layoutMenuItemsEx(text_yes, bmp_yes, menu->current + 1, menu->counts,
                     menu->title ? _gettext(menu->title) : NULL, descriptions[3],
@@ -173,3 +173,6 @@ void menu_run(uint8_t key, uint32_t time) {
 }
 
 void menu_display_refresh(void) { menu_display(currentMenu); }
+
+struct menu *get_current_menu(void) { return currentMenu; }
+

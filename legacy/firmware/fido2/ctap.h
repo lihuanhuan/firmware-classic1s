@@ -168,7 +168,7 @@
 #define CREDENTIAL_IS_SUPPORTED     1
 #define CREDENTIAL_NOT_SUPPORTED    0
 
-#define ALLOW_LIST_MAX_SIZE         10
+#define ALLOW_LIST_MAX_SIZE         30
 
 #define NEW_PIN_ENC_MAX_SIZE        256     // includes NULL terminator
 #define NEW_PIN_ENC_MIN_SIZE        64
@@ -484,7 +484,7 @@ void ctap_load_external_keys(uint8_t * keybytes);
 #if DEBUG_CTAP
 #include "usart.h"
 #define ctap_printf uart_printf
-#define dump_hex1(tag, data, len) uart_debug(NULL, data, len)
+#define dump_hex1(tag, data, len) //uart_debug(NULL, data, len)
 #else
 #define ctap_printf(fmt, ...)
 #define dump_hex1(tag, data, len)

@@ -167,20 +167,20 @@ int main(void) {
       oledClear();
       oledDrawBitmap(52, 20, &bmp_boot_icon);
       oledRefresh();
-      const image_header *hdr =
-          (const image_header *)FLASH_PTR(FLASH_FWHEADER_START);
+      // const image_header *hdr =
+      //     (const image_header *)FLASH_PTR(FLASH_FWHEADER_START);
 
-      uint8_t fingerprint[32] = {0};
-      int signed_firmware = signatures_match(hdr, fingerprint);
-      if (SIG_OK != signed_firmware) {
-        show_halt("Unofficial firmware", "aborted.");
-      }
+      // uint8_t fingerprint[32] = {0};
+      // int signed_firmware = signatures_match(hdr, fingerprint);
+      // if (SIG_OK != signed_firmware) {
+      //   show_halt("Unofficial firmware", "aborted.");
+      // }
 
-      if (SIG_OK != check_firmware_hashes(hdr)) {
-        show_halt("Broken firmware", "detected.");
-      }
+      // if (SIG_OK != check_firmware_hashes(hdr)) {
+      //   show_halt("Broken firmware", "detected.");
+      // }
       mpu_config_off();
-      load_app(signed_firmware);
+      load_app(SIG_OK);
     }
 #endif
   }

@@ -661,10 +661,31 @@ static struct menu about_menu = {
     .button_type = BTN_TYPE_NEXT,
 };
 
-static const struct menu_item main_menu_items[] = {
-    {"General", NULL, false, .sub_menu = &settings_menu, NULL, false},
-    {"Security", NULL, false, .sub_menu = &security_set_menu, NULL, false},
-    {"About Device", NULL, false, .sub_menu = &about_menu, NULL, false}};
+void menu_set_ble(int index) {
+  (void)index;
+  layoutDialogCenterAdapterV2(NULL, NULL, &bmp_bottom_left_arrow,
+                              &bmp_bottom_right_arrow, NULL, NULL, NULL, NULL,
+                              NULL, NULL, NULL);
+}
+
+static const struct menu_item transport_set_menu_items[] = {
+  {"BLE", NULL, true, menu_set_ble, NULL, true, NULL},
+  {"USB", NULL, true, menu_set_ble, NULL, true, NULL}};
+
+static struct menu transport_set_menu = {
+  .start = 0,
+  .current = 0,
+  .counts = COUNT_OF(transport_set_menu_items),
+  .title = "Transport",
+  .items = (struct menu_item *)transport_set_menu_items,
+  .previous = &main_menu,
+};
+
+static struct menu_item main_menu_items[] = {
+    {"Reset", NULL, true, menu_erase_device, NULL, false, NULL},
+    {"Change PIN", NULL, true, menu_changePin, NULL, false, NULL},
+    {"Transport", NULL, false, .sub_menu = &transport_set_menu, NULL, false, NULL}
+};
 
 static struct menu main_menu = {
     .start = 0,
@@ -675,6 +696,14 @@ static struct menu main_menu = {
     .previous = NULL,
     .button_type = BTN_TYPE_NEXT,
 };
+
+void update_pin_menu_name(bool has_pin) {
+  if (has_pin) {
+    main_menu_items[1].name = "Change PIN";
+  } else {
+    main_menu_items[1].name = "Set PIN";
+  }
+}
 
 void menu_autolock_added_custom(void) {
   static char autolock_custom_name[32] = {0};
@@ -703,6 +732,10 @@ void main_menu_init(bool state) {
 }
 
 void menu_default(void) {
-  menu_init_settings_menu();
+  // menu_init_settings_menu();
   menu_init(&main_menu);
+}
+
+bool current_menu_is_main(void) {
+  return get_current_menu() == &main_menu;
 }

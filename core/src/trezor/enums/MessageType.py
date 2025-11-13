@@ -254,6 +254,9 @@ if not utils.BITCOIN_ONLY:
     SolanaAddress = 10101
     SolanaSignTx = 10102
     SolanaSignedTx = 10103
+    SolanaSignOffChainMessage = 10104
+    SolanaMessageSignature = 10105
+    SolanaSignUnsafeMessage = 10106
     StarcoinGetAddress = 10300
     StarcoinAddress = 10301
     StarcoinGetPublicKey = 10302
@@ -376,3 +379,15 @@ if not utils.BITCOIN_ONLY:
     AlephiumBytecodeAck = 12108
     AlephiumSignMessage = 12109
     AlephiumMessageSignature = 12110
+    BenfenGetAddress = 12201
+    BenfenAddress = 12202
+    BenfenSignTx = 12203
+    BenfenSignedTx = 12204
+    BenfenSignMessage = 12205
+    BenfenMessageSignature = 12206
+    BenfenTxRequest = 12207
+    BenfenTxAck = 12208
+    NeoGetAddress = 12301
+    NeoAddress = 12302
+    NeoSignTx = 12303
+    NeoSignedTx = 12304

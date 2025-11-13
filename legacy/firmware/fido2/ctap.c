@@ -122,9 +122,7 @@ static uint8_t KEY_AGREEMENT_PRIV[32];
 #define PIN_CONSECUTIVE_FAILURES_MAX 3
 static uint8_t pin_consecutive_failures = 0;
 
-void ctap_reset_pin_consecutive_failures(void) {
-  pin_consecutive_failures = 0;
-}
+void ctap_reset_pin_consecutive_failures(void) { pin_consecutive_failures = 0; }
 
 struct _getAssertionState getAssertionState;
 
@@ -205,7 +203,7 @@ uint8_t ctap_get_info(CborEncoder *cbor_encoder) {
         ret = cbor_encode_text_string(&options, "uv", 2);
         check_ret(ret);
         {
-          ret = cbor_encode_boolean(&options, 1);
+          ret = cbor_encode_boolean(&options, se_hasPin() ? 1 : 0);
           check_ret(ret);
         }
 
@@ -723,7 +721,7 @@ static int ctap_make_auth_data(CTAP_makeCredential mc, uint32_t counter,
       ((counter & 0xFF) << 24) | ((counter & 0xFF00) << 8) |
       ((counter & 0xFF0000) >> 8) | ((counter & 0xFF000000) >> 24);
 
-  memcpy(authData->attest.aaguid, CTAP_AAGUID, sizeof(CTAP_AAGUID) - 1);
+  memcpy(authData->attest.aaguid, CTAP_AAGUID, sizeof(CTAP_AAGUID));
   authData->attest.credLenL = cred_id_len & 0x00FF;
   authData->attest.credLenH = (cred_id_len & 0xFF00) >> 8;
   memcpy(auth_data_buf + sizeof(CTAP_authData), cred_id, cred_id_len);
@@ -979,6 +977,7 @@ int ctap_authenticate_credential_data(const uint8_t *rp_id_hash,
           return 0;
         }
       }
+      desc->cred_id[3] = cred_protect;
       desc->type = PUB_KEY_CRED_PUB_KEY;
       return 1;
     }
@@ -1211,7 +1210,8 @@ refresh:
   if (MC.credInfo.rk) {
     uint8_t rp_id_hash[32];
     sha256_Raw((uint8_t *)MC.rp.id, MC.rp.size, rp_id_hash);
-    if (!resident_credential_store(rp_id_hash, MC.credInfo.user.id, cred_id_buf,
+    if (!resident_credential_store(rp_id_hash, MC.credInfo.user.id,
+                                   MC.credInfo.user.id_size, cred_id_buf,
                                    cred_id_len)) {
       layoutDialogCenterAdapterV2(_(FIDO_ADD_KEY_LIMIT_REACHED_TITLE), NULL,
                                   NULL, &bmp_bottom_right_confirm, NULL, NULL,
@@ -1224,6 +1224,8 @@ refresh:
   return CTAP1_ERR_SUCCESS;
 }
 
+extern void gen_fido_seed(void);
+
 uint8_t ctap_make_credential_phrase_1(uint8_t *request, int length,
                                       CTAP_makeCredential *MC) {
   int ret;
@@ -1231,12 +1233,16 @@ uint8_t ctap_make_credential_phrase_1(uint8_t *request, int length,
 
   ctap_printf("makeCredential request:\n");
   // dump_hex1(TAG_GREEN, request, length);
-
+  // uart_debug(NULL, request, length);                                    
   ret = ctap_parse_make_credential(MC, request, length);
-
+  
   if (ret != 0) {
     ctap_printf("error, parse_make_credential failed\n");
     return ret;
+  }
+
+  if (MC->pinAuthEmpty == 1) {
+    return se_hasPin() ? CTAP2_ERR_PIN_AUTH_INVALID : CTAP2_ERR_PIN_NOT_SET;
   }
 
   if ((MC->paramsParsed & MC_requiredMask) != MC_requiredMask) {
@@ -1245,12 +1251,18 @@ uint8_t ctap_make_credential_phrase_1(uint8_t *request, int length,
     return CTAP2_ERR_MISSING_PARAMETER;
   }
 
+  if (se_hasPin() && MC->pinAuthPresent == 0) {
+    return CTAP2_ERR_PIN_REQUIRED;
+  }
+
   if (se_hasPin() && (MC->pinAuthPresent)) {
     ret =
         verify_pin_auth(MC->pinAuth, MC->clientDataHash, CLIENT_DATA_HASH_SIZE);
     check_retr(ret);
     user_verified = true;
   }
+
+  gen_fido_seed();
 
   if (MC->up == 1 || MC->up == 0) {
     return CTAP2_ERR_INVALID_OPTION;
@@ -1269,7 +1281,8 @@ uint8_t ctap_make_credential_phrase_1(uint8_t *request, int length,
     }
     check_retr(ret);
 
-    if (ctap_authenticate_credential(&MC->rp, &excl_cred, user_verified, false)) {
+    if (ctap_authenticate_credential(&MC->rp, &excl_cred, user_verified,
+                                     false)) {
       return CTAP2_ERR_CREDENTIAL_EXCLUDED;
     }
 
@@ -1280,9 +1293,8 @@ uint8_t ctap_make_credential_phrase_1(uint8_t *request, int length,
   char *account_name = get_account_name(&MC->credInfo.user);
 
   layoutDialogAdapterEx(_(FIDO_INFO_CONFIRMATION_TITLE), &bmp_bottom_left_close,
-                        NULL, &bmp_bottom_right_confirm, NULL, NULL,
-                        _(GLOBAL_APP_NAME), MC->rp.id, _(GLOBAL_ACCOUNT),
-                        account_name);
+                        NULL, &bmp_bottom_right_confirm, NULL, NULL, MC->rp.id,
+                        account_name, NULL, NULL);
 
   return CTAP1_ERR_SUCCESS;
 }
@@ -1356,6 +1368,7 @@ uint8_t ctap_make_credential_phrase_2(CborEncoder *encoder,
     uint8_t rp_id_hash[32];
     sha256_Raw((uint8_t *)MC->rp.id, MC->rp.size, rp_id_hash);
     if (!resident_credential_store(rp_id_hash, MC->credInfo.user.id,
+                                   MC->credInfo.user.id_size,
                                    cred_id_buf, cred_id_len)) {
       layoutDialogCenterAdapterV2(_(FIDO_ADD_KEY_LIMIT_REACHED_TITLE), NULL,
                                   NULL, &bmp_bottom_right_confirm, NULL, NULL,
@@ -2174,9 +2187,16 @@ uint8_t ctap_get_assertion_phrase_1(uint8_t *request, int length,
     return ret;
   }
 
-  // memset(&getAssertionState, 0, sizeof(getAssertionState));
+  if (GA->pinAuthEmpty) {
+    return se_hasPin() ? CTAP2_ERR_PIN_AUTH_INVALID : CTAP2_ERR_PIN_NOT_SET;
+  }
 
-  if (GA->pinAuthPresent) {
+  if (GA->pinAuthPresent == 0 && !session_isUnlocked()) {
+    return CTAP2_ERR_PIN_REQUIRED;
+  }
+
+  // memset(&getAssertionState, 0, sizeof(getAssertionState));
+  if (GA->pinAuthPresent && se_hasPin()) {
     ret =
         verify_pin_auth(GA->pinAuth, GA->clientDataHash, CLIENT_DATA_HASH_SIZE);
     check_retr(ret);
@@ -2187,8 +2207,7 @@ uint8_t ctap_get_assertion_phrase_1(uint8_t *request, int length,
     GA->user_verified = 0;
   }
 
-  if (GA->pinAuthEmpty) {
-  }
+  gen_fido_seed();
 
   if (!GA->rp.size || !GA->clientDataHashPresent) {
     return CTAP2_ERR_MISSING_PARAMETER;
@@ -2201,6 +2220,16 @@ uint8_t ctap_get_assertion_phrase_1(uint8_t *request, int length,
     GA->is_resident_credential = true;
   }
   GA->valid_cred_count = ctap_filter_invalid_credentials(GA);
+
+  // if (GA->credLen == 0 && GA->valid_cred_count == 0) {
+  //   if (is_find_cred_by_protect()) {
+  //     return CTAP2_ERR_PIN_REQUIRED;
+  //   }
+  // }
+
+  if (is_find_cred_by_protect()) {
+    return CTAP2_ERR_PIN_REQUIRED;
+  }
 
   if (GA->valid_cred_count == 0) {
     ctap_printf("Error, no authentic credential\n");
@@ -2248,8 +2277,16 @@ uint8_t ctap_get_assertion_phrase_1(uint8_t *request, int length,
     } else {
       layoutDialogAdapterEx(_(FIDO_2_AUTHENTICATE), &bmp_bottom_left_close,
                             NULL, &bmp_bottom_right_confirm, NULL, NULL,
-                            _(GLOBAL_APP_NAME), cred->credential.rp.id,
-                            _(GLOBAL_ACCOUNT), account_name);
+                            cred->credential.rp.id, account_name, NULL, NULL);
+
+      if (GA->valid_cred_count > 1) {
+        oledDrawBitmap(3 * OLED_WIDTH / 4, OLED_HEIGHT - 8,
+                       &bmp_bottom_middle_arrow_down);
+
+        oledDrawBitmap(OLED_WIDTH / 4 - 8, OLED_HEIGHT - 8,
+                       &bmp_bottom_middle_arrow_up);
+        oledRefresh();
+      }
     }
   }
 
@@ -2276,8 +2313,14 @@ void ctap_assertion_select_credential(CTAP_getAssertion *GA, bool up) {
   account_name = get_account_name(&cred->credential.user);
   layoutDialogAdapterEx(_(FIDO_2_AUTHENTICATE), &bmp_bottom_left_close, NULL,
                         &bmp_bottom_right_confirm, NULL, NULL,
-                        _(GLOBAL_APP_NAME), cred->credential.rp.id,
-                        _(GLOBAL_ACCOUNT), account_name);
+                        cred->credential.rp.id, account_name, NULL, NULL);
+
+  oledDrawBitmap(3 * OLED_WIDTH / 4, OLED_HEIGHT - 8,
+                 &bmp_bottom_middle_arrow_down);
+
+  oledDrawBitmap(OLED_WIDTH / 4 - 8, OLED_HEIGHT - 8,
+                 &bmp_bottom_middle_arrow_up);
+  oledRefresh();
 }
 
 uint8_t ctap_get_assertion_phrase_2(CborEncoder *encoder,
@@ -2428,7 +2471,7 @@ uint8_t ctap_update_pin_if_verified(uint8_t *pinEnc, int len,
     memset(iv, 0, sizeof(iv));
     aes_cbc_decrypt(pinHashEnc, pinHashEnc, 16, iv, &dec_ctx);
     data2hex(pinHashEnc, 16, pinHashStr);
-    ctap_printf("pinHashEnc: %s\n", pinHashStr);
+    ctap_printf("pinHashEnc 0: %s\n", pinHashStr);
     if (!se_verifyPin(pinHashStr)) {
       pin_consecutive_failures++;
       if (pin_consecutive_failures >= PIN_CONSECUTIVE_FAILURES_MAX) {
@@ -2464,7 +2507,7 @@ uint8_t ctap_add_pin_if_verified(uint8_t *pinTokenEnc, uint8_t *platform_pubkey,
   aes_decrypt_key256(shared_secret, &dec_ctx);
   aes_cbc_decrypt(pinHashEnc, pinHashEnc, 16, iv, &dec_ctx);
 
-  ctap_printf("pinHashEnc: ");
+  ctap_printf("pinHashEnc 1: \n");
   dump_hex1(TAG_ERR, pinHashEnc, 16);
 
   char pinHashStr[33];

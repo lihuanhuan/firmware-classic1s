@@ -476,6 +476,25 @@ static void i2c_slave_poll(void) {
   }
 }
 
+extern void ble_fido_read(uint8_t *data, uint16_t len);
+
+void ble_fido_poll(void) {
+  uint32_t total_len;
+  uint8_t header[3];
+
+  total_len = fifo_lockdata_len(&i2c_fifo_in);
+  if (total_len > 0) {
+    fifo_read_peek(&i2c_fifo_in, header, sizeof(header));
+    if (memcmp(header, "fid", 3) == 0) {
+      uint8_t *fido_data = get_ble_fido_data_ptr();
+      fifo_read_lock(&i2c_fifo_in, header, sizeof(header));
+      fifo_read_lock(&i2c_fifo_in, fido_data, total_len - 3);
+      // set_ble_fido_data_len(total_len - 3);
+      ble_fido_read(fido_data, total_len - 3);
+    }
+  }
+}
+
 void usbPoll(void) {
   static const uint8_t *data;
 

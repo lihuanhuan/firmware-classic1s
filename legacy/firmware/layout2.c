@@ -819,6 +819,8 @@ static void _layout_home(bool update_menu) {
     } else {
       oledDrawBitmap(128 / 2 - 4, 0, &bmp_status_locked);
       oledDrawStringCenterAdapter(OLED_WIDTH / 2, 19, label, FONT_STANDARD);
+      oledDrawStringCenterAdapter(OLED_WIDTH / 2, OLED_HEIGHT - 10,
+        ble_get_name(), FONT_STANDARD);
       // if (no_backup) {
       //   oledBox(0, OLED_HEIGHT - 8, 127, 8, false);
       //   oledDrawStringCenterAdapter(OLED_WIDTH / 2, OLED_HEIGHT - 9, "SEEDLESS",

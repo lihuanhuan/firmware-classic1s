@@ -38,7 +38,7 @@ GDB      := $(PREFIX)gdb --nx -ex 'set remotetimeout unlimited' -ex 'set confirm
 
 CONFFLAG ?= -DCONFIDENTIAL='__attribute__((section("confidential")))'
 OPTFLAGS ?= -Os
-DBGFLAGS ?= -g -DNDEBUG
+DBGFLAGS ?= -g3 -DNDEBUG
 CPUFLAGS ?= -mcpu=cortex-m4 -mthumb
 FPUFLAGS ?= -msoft-float
 

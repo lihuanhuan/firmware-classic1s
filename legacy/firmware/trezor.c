@@ -301,6 +301,8 @@ int main(void) {
   config_wipe();
 #endif
 #endif
+  // delay_ms(2000);
+  // change_ble_sta(false);
 
   config_init();
   // config_unlock("0000");
@@ -309,8 +311,7 @@ int main(void) {
   uart_printf("trezor start\n");
 
   font_init();
-  menu_default();
-  usbInit();
+  menu_default();  
 
   ctap_init();
 

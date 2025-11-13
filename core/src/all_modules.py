@@ -127,6 +127,10 @@ trezor.enums.SafetyCheckLevel
 import trezor.enums.SafetyCheckLevel
 trezor.enums.SdProtectOperationType
 import trezor.enums.SdProtectOperationType
+trezor.enums.TonWalletVersion
+import trezor.enums.TonWalletVersion
+trezor.enums.TonWorkChain
+import trezor.enums.TonWorkChain
 trezor.enums.TronResourceCode
 import trezor.enums.TronResourceCode
 trezor.enums.WordRequestType

@@ -3,15 +3,21 @@
 #include "task_header.h"
 #include "user_messages.h"
 
+#include "ble.h"
 #include "buttons.h"
 #include "common.h"
 #include "config.h"
+#include "fido2/ctap_trans.h"
+#include "fido2/resident_credential.h"
 #include "gettext.h"
 #include "menu_core.h"
+#include "menu_list.h"
 #include "rng.h"
 #include "se_chip.h"
 #include "secbool.h"
 #include "usart.h"
+#include "util.h"
+#include "usb.h"
 
 typedef struct {
   pin_operation_t operation;
@@ -41,13 +47,7 @@ void set_system_state(int state) {
   xSemaphoreGive(system_state_semaphore);
 }
 
-int generate_random_pin(void) {
-  int index = 0;
-  do {
-    index = random_uniform(10);
-  } while (index == 0);
-  return index;
-}
+int generate_random_pin(void) { return random_uniform(10); }
 
 static bool pin_input(char *prompt, int min_len, int max_len, char *pin) {
   int pos = 0;
@@ -56,6 +56,9 @@ static bool pin_input(char *prompt, int min_len, int max_len, char *pin) {
   key_msg_t msg;
 
   while (1) {
+    if (pos >= min_len) {
+      index = 10;
+    }
     layout_ui_pin_input(prompt, pos, index);
     max_index = pos >= min_len ? 10 : 9;
     if (xQueueReceive(ui_key_msg_queue, &msg, pdMS_TO_TICKS(1000 * 60 * 1)) ==
@@ -78,9 +81,9 @@ static bool pin_input(char *prompt, int min_len, int max_len, char *pin) {
         }
         index = generate_random_pin();
       } else if (msg.value == KEY_UP) {
-        index = index > 1 ? index - 1 : max_index;
+        index = index > 0 ? index - 1 : max_index;
       } else if (msg.value == KEY_DOWN) {
-        index = index < max_index ? index + 1 : 1;
+        index = index < max_index ? index + 1 : 0;
       }
     } else {
       return false;
@@ -107,6 +110,15 @@ static void pin_task(void *pvParameters) {
       if (pin_input(_(T__ENTER_NEW_PIN_AGAIN), DEFAULT_PIN_LEN, MAX_PIN_LEN,
                     pin_confirm)) {
         if (strcmp(pin, pin_confirm) == 0) {
+          uint8_t pin_hash[32];
+          char pin_hash_str[33] = {0};
+          sha256_Raw((uint8_t *)pin, strlen(pin), pin_hash);
+          data2hex(pin_hash, 16, pin_hash_str);
+          se_setPin(pin_hash_str);
+          layout_set_home();
+        } else {
+          layout_ui_input_pin_dismatched();
+          layout_set_home();
         }
       }
     }
@@ -115,7 +127,7 @@ static void pin_task(void *pvParameters) {
   memset(pin, 0, sizeof(pin));
   memset(pin_confirm, 0, sizeof(pin_confirm));
   layout_set_home();
-  
+
   pin_task_handle = NULL;
   vTaskDelete(NULL);
 }
@@ -162,7 +174,7 @@ void menu_task(void *pvParameters) {
       }
     }
   }
-  
+
   menu_task_handle = NULL;
   vTaskDelete(NULL);
 }
@@ -178,8 +190,8 @@ static void ui_status_bar_task(void *pvParameters) {
 
 void layout_set_home(void) {
   ui_msg_t ui_msg = {
-    .msg_type = UI_MSG_HOME,
-    .dialog = NULL,
+      .msg_type = UI_MSG_HOME,
+      .dialog = NULL,
   };
   set_system_state(UI_PAGE_HOME);
   xQueueOverwrite(ui_msg_queue, &ui_msg);
@@ -199,22 +211,104 @@ static void ui_lcd_task(void *pvParameters) {
       {
         int state = get_system_state();
         switch (state) {
-          // case UI_PAGE_HOME:
-          //   if (key_msg.value == KEY_CANCEL) {
-          //     break;
-          //   }
-          //   if (!session_isUnlocked() && config_hasPin()) {
-          //     create_pin_task(PIN_OPERATION_VERIFY);
-          //   } else {
-          //     if (menu_task_handle == NULL) {
-          //       if (xTaskCreate(menu_task, "menu task", 1024, NULL,
-          //                       TASK_PRIORITY_HIGHEST,
-          //                       &menu_task_handle) != pdPASS) {
-          //         ensure(false, "menu_task create failed");
-          //       }
-          //     }
-          //   }
-          //   break;
+          case UI_PAGE_HOME:
+            if (key_msg.value == KEY_CANCEL) {
+              break;
+            } else if (key_msg.value == KEY_CONFIRM) {
+              update_pin_menu_name(config_hasPin());
+              menu_display_refresh();
+              set_system_state(UI_PAGE_MENU);
+            }
+            break;
+          case UI_PAGE_MENU:
+            if (key_msg.value == KEY_CANCEL) {
+              layout_ui_home();
+              set_system_state(UI_PAGE_HOME);
+              break;
+            } else if (key_msg.value == KEY_UP) {
+              menu_up();
+              menu_display_refresh();
+            } else if (key_msg.value == KEY_DOWN) {
+              menu_down();
+              menu_display_refresh();
+            } else if (key_msg.value == KEY_CONFIRM) {
+              struct menu *menu = get_current_menu();
+              if (current_menu_is_main()) {
+                if (menu->current == 0) {  // Reset
+                  layout_ui_reset();
+                  set_system_state(UI_PAGE_RESET);
+                } else if (menu->current == 1) {  // Change PIN
+                  set_system_state(UI_PAGE_PIN);
+                  create_pin_task(config_hasPin() ? PIN_OPERATION_VERIFY
+                                                  : PIN_OPERATION_SET);
+                } else if (menu->current == 2) {  // Transport
+                  menu_enter();
+                  menu_display_refresh();
+                }
+              } else {
+                if (menu->current == 0) {  // select transport ble
+                  layout_ui_transport_ble();
+                  set_system_state(UI_PAGE_TRANSPORT_BLE);
+                } else if (menu->current == 1) {  // select transport usb
+                  layout_ui_transport_usb();
+                  set_system_state(UI_PAGE_TRANSPORT_USB);
+                }
+              }
+            }
+            break;
+
+          case UI_PAGE_TRANSPORT_BLE:
+            if (key_msg.value == KEY_CANCEL) {
+              layout_ui_home();
+              set_system_state(UI_PAGE_HOME);
+            } else if (key_msg.value == KEY_CONFIRM) {
+              config_setUsblock(true);
+              change_ble_sta(true);
+              usbDisconnect();
+              svc_system_reset();
+            }
+            break;
+          case UI_PAGE_TRANSPORT_USB:
+            if (key_msg.value == KEY_CANCEL) {
+              layout_ui_home();
+              set_system_state(UI_PAGE_HOME);
+            } else if (key_msg.value == KEY_CONFIRM) {
+              config_setUsblock(false);
+              change_ble_sta(false);
+              usbDisconnect();
+              svc_system_reset();
+            }
+            break;
+
+            // if (key_msg.value == KEY_CONFIRM) {
+            //   layout_ui_reset();
+            //   set_system_state(UI_PAGE_RESET);
+            // }
+            // if (!session_isUnlocked() && config_hasPin()) {
+            //   create_pin_task(PIN_OPERATION_VERIFY);
+            // } else {
+            //   if (menu_task_handle == NULL) {
+            //     if (xTaskCreate(menu_task, "menu task", 1024, NULL,
+            //                     TASK_PRIORITY_HIGHEST,
+            //                     &menu_task_handle) != pdPASS) {
+            //       ensure(false, "menu_task create failed");
+            //     }
+            //   }
+            // }
+            break;
+          case UI_PAGE_RESET:
+            if (key_msg.value == KEY_CANCEL) {
+              break;
+            }
+            if (key_msg.value == KEY_CONFIRM) {
+              resident_credential_clear();
+              se_reset_storage();
+              config_setFidoResetCount(config_nextU2FCounter());
+              ctap_reset_pin_consecutive_failures();
+              layout_ui_home();
+              set_system_state(UI_PAGE_HOME);
+            }
+            break;
           default:
             break;
         }
@@ -222,8 +316,9 @@ static void ui_lcd_task(void *pvParameters) {
     }
     if (xQueueReceive(ui_msg_queue, &ui_msg, pdMS_TO_TICKS(5)) == pdPASS) {
       if (ui_msg.msg_type == UI_MSG_HOME) {
-        uart_printf("UI_MSG_HOME\n");
+        // uart_printf("UI_MSG_HOME\n");
         layout_ui_home();
+        set_system_state(UI_PAGE_HOME);
       }
     }
   }

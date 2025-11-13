@@ -83,12 +83,16 @@ static void vUART_SendData(uint8_t *pucSendData, uint16_t usStrLen) {
 }
 
 void uart_debug(char *pcMsg, uint8_t *pucSendData, uint16_t usStrLen) {
-  uint8_t ucBuff[600];
+  uint8_t ucBuff[3] = {0};
 
   vUART_SendData((uint8_t *)pcMsg, strlen(pcMsg));
-  if (pucSendData != NULL) {
-    vUART_HtoA(pucSendData, usStrLen, ucBuff);
-    vUART_SendData(ucBuff, usStrLen * 2);
+  // if (pucSendData != NULL) {
+  //   vUART_HtoA(pucSendData, usStrLen, ucBuff);
+  //   vUART_SendData(ucBuff, usStrLen * 2);
+  // }
+  for (int i = 0; i < usStrLen; i++) {
+    vUART_HtoA((uint8_t *)&pucSendData[i], 1, ucBuff);
+    vUART_SendData(ucBuff, 2);
   }
   vUART_SendData((uint8_t *)"\n", 1);
 }

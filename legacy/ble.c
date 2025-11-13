@@ -81,7 +81,8 @@ void change_ble_sta(uint8_t mode) {
   cmd[0] = BLE_CMD_ONOFF_BLE;
   cmd[1] = 0x01;
   cmd[2] = mode;
-  if (ble_switch != mode) {
+  // if (ble_switch != mode)
+  {
     ble_cmd_packet(cmd, 0x03);
     ble_switch = mode;
   }

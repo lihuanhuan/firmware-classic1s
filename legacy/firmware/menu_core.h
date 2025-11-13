@@ -43,6 +43,7 @@ bool menu_exit(void);
 void menu_run(uint8_t key, uint32_t time);
 void menu_refresh(void);
 void menu_display_refresh(void);
+struct menu *get_current_menu(void);
 #define menu_update(menu, field, value) (menu)->field = value
 
 #endif

@@ -5,11 +5,19 @@
 #include "layout2.h"
 #include "se_chip.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
+static bool find_cred_by_protect = false;
+
+bool is_find_cred_by_protect(void) { return find_cred_by_protect; }
+
 uint32_t resident_credential_get_count(void) { return 0; }
 
-uint32_t resident_credential_find_by_rp_id_hash(
-    const uint8_t *rp_id_hash, CTAP_credentialDescriptor *cred_desc,
-    uint32_t max_count, bool user_verified) {
+int resident_credential_find_by_rp_id_hash(const uint8_t *rp_id_hash,
+                                           CTAP_credentialDescriptor *cred_desc,
+                                           uint32_t max_count,
+                                           bool user_verified) {
   CTAP_credential_id_storage cred_id_storage = {0};
   uint16_t len =
       sizeof(cred_id_storage) - FIDO2_RESIDENT_CREDENTIALS_HEADER_LEN;
@@ -18,8 +26,11 @@ uint32_t resident_credential_find_by_rp_id_hash(
   UI_WAIT_CALLBACK ui_callback = se_get_ui_callback();
   uint8_t percent = 0;
 
+  find_cred_by_protect = false;
+
   for (uint32_t i = 0;
        i < FIDO2_RESIDENT_CREDENTIALS_COUNT && count < max_count; i++) {
+    vTaskDelay(pdMS_TO_TICKS(1));
     percent = (i + 1) * 100 / FIDO2_RESIDENT_CREDENTIALS_COUNT;
     ui_callback(_(C__PROCESSING_ETC), percent * 10);
     len = sizeof(cred_id_storage) - FIDO2_RESIDENT_CREDENTIALS_HEADER_LEN;
@@ -28,15 +39,18 @@ uint32_t resident_credential_find_by_rp_id_hash(
       ctap_printf("get resident credential %d\n", i);
       dump_hex1(NULL, cred_id_storage.rp_id_hash, len);
       uint8_t cred_protect = cred_id_storage.credential_id[3];
-      if (cred_protect == EXT_CRED_PROTECT_OPTIONAL_WITH_CREDID ||
-          cred_protect == EXT_CRED_PROTECT_REQUIRED) {
-        if (!user_verified) {
-          continue;
-        }
-      }
+
       if (memcmp(cred_id_storage.rp_id_hash, rp_id_hash, RP_ID_HASH_LENGTH) ==
           0) {
-        ctap_printf("find same rp id hash\n");
+        ctap_printf("find same rp id hash %d %d\n", user_verified, cred_protect);
+        if (cred_protect == EXT_CRED_PROTECT_OPTIONAL_WITH_CREDID ||
+            cred_protect == EXT_CRED_PROTECT_REQUIRED) {
+          if (!user_verified) {
+            find_cred_by_protect = true;
+            continue;
+          }
+        }
+        ctap_printf("parse resident credential \n");
         memcpy(cred_desc[count].cred_id, cred_id_storage.credential_id,
                len - RP_ID_HASH_LENGTH);
         cred_desc[count].cred_id_len = len - RP_ID_HASH_LENGTH;
@@ -51,8 +65,8 @@ uint32_t resident_credential_find_by_rp_id_hash(
 }
 
 bool resident_credential_store(const uint8_t *rp_id_hash,
-                               const uint8_t *user_id, const uint8_t *cred_id,
-                               uint32_t cred_id_len) {
+                               const uint8_t *user_id, uint8_t user_id_len,
+                               const uint8_t *cred_id, uint32_t cred_id_len) {
   CTAP_credentialDescriptor cred_id_desc = {0};
   CTAP_credential_id_storage cred_id_storage = {0};
   uint16_t len =
@@ -82,8 +96,10 @@ bool resident_credential_store(const uint8_t *rp_id_hash,
         cred_id_desc.cred_id_len = len - RP_ID_HASH_LENGTH;
         memcpy(cred_id_desc.cred_id, cred_id_storage.credential_id,
                len - RP_ID_HASH_LENGTH);
-        ctap_authenticate_credential_data(rp_id_hash, &cred_id_desc,true,true);
-        if (memcmp(cred_id_desc.credential.user.id, user_id,
+        ctap_authenticate_credential_data(rp_id_hash, &cred_id_desc, true,
+                                          true);
+        if (user_id_len == cred_id_desc.credential.user.id_size &&
+            memcmp(cred_id_desc.credential.user.id, user_id,
                    cred_id_desc.credential.user.id_size) == 0) {
           ctap_printf("find same user id, override\n");
           slot = i;
@@ -146,8 +162,8 @@ int resident_credential_get_desc(uint8_t index,
     cred_desc->cred_id_len = len - RP_ID_HASH_LENGTH;
     memcpy(cred_desc->cred_id, cred_id_storage.credential_id,
            cred_desc->cred_id_len);
-    if (ctap_authenticate_credential_data(cred_id_storage.rp_id_hash,
-                                          cred_desc,true,true) == 0) {
+    if (ctap_authenticate_credential_data(cred_id_storage.rp_id_hash, cred_desc,
+                                          true, true) == 0) {
       return 0;
     }
   }

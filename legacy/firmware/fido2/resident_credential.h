@@ -10,7 +10,7 @@
 #define RP_ID_HASH_LENGTH 32
 
 #define FIDO2_RESIDENT_CREDENTIALS_SIZE (512)
-#define FIDO2_RESIDENT_CREDENTIALS_COUNT 20
+#define FIDO2_RESIDENT_CREDENTIALS_COUNT 30
 #define FIDO2_RESIDENT_CREDENTIALS_HEADER_LEN (6)
 #define FIDO2_RESIDENT_CREDENTIALS_FLAGS "\x66\x69\x64\x6F"  // "fido"
 
@@ -24,16 +24,17 @@ _Static_assert(sizeof(CTAP_credential_id_storage) ==
                    FIDO2_RESIDENT_CREDENTIALS_SIZE,
                "CTAP_credential_id_storage size must be flash page size");
 
-uint32_t resident_credential_find_by_rp_id_hash(
+int resident_credential_find_by_rp_id_hash(
     const uint8_t *rp_id_hash, CTAP_credentialDescriptor *cred_desc,
     uint32_t max_count,bool user_verified);
 bool resident_credential_store(const uint8_t *rp_id_hash,
-                               const uint8_t *user_id, const uint8_t *cred_id,
-                               uint32_t cred_id_len);
+                               const uint8_t *user_id, uint8_t user_id_len,
+                               const uint8_t *cred_id, uint32_t cred_id_len);
 int resident_credential_info(uint8_t indexs[FIDO2_RESIDENT_CREDENTIALS_COUNT],
                              int progress_ratio);
 int resident_credential_get_desc(uint8_t index,
                                  CTAP_credentialDescriptor *cred_desc);
 bool resident_credential_delete(uint8_t index);
 void resident_credential_clear(void);
+bool is_find_cred_by_protect(void);
 #endif

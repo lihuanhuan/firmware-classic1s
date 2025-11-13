@@ -24,9 +24,10 @@ if TYPE_CHECKING:
     from trezor.enums import ButtonRequestType  # noqa: F401
     from trezor.enums import Capability  # noqa: F401
     from trezor.enums import CardanoAddressType  # noqa: F401
+    from trezor.enums import CardanoCVoteRegistrationFormat  # noqa: F401
     from trezor.enums import CardanoCertificateType  # noqa: F401
+    from trezor.enums import CardanoDRepType  # noqa: F401
     from trezor.enums import CardanoDerivationType  # noqa: F401
-    from trezor.enums import CardanoGovernanceRegistrationFormat  # noqa: F401
     from trezor.enums import CardanoNativeScriptHashDisplayFormat  # noqa: F401
     from trezor.enums import CardanoNativeScriptType  # noqa: F401
     from trezor.enums import CardanoPoolRelayType  # noqa: F401
@@ -58,6 +59,8 @@ if TYPE_CHECKING:
     from trezor.enums import RequestType  # noqa: F401
     from trezor.enums import SafetyCheckLevel  # noqa: F401
     from trezor.enums import SdProtectOperationType  # noqa: F401
+    from trezor.enums import SolanaOffChainMessageFormat  # noqa: F401
+    from trezor.enums import SolanaOffChainMessageVersion  # noqa: F401
     from trezor.enums import StellarAssetType  # noqa: F401
     from trezor.enums import StellarMemoType  # noqa: F401
     from trezor.enums import StellarSignerType  # noqa: F401
@@ -412,6 +415,138 @@ if TYPE_CHECKING:
 
         @classmethod
         def is_type_of(cls, msg: Any) -> TypeGuard["AptosMessagePayload"]:
+            return isinstance(msg, cls)
+
+    class BenfenGetAddress(protobuf.MessageType):
+        address_n: "list[int]"
+        show_display: "bool | None"
+
+        def __init__(
+            self,
+            *,
+            address_n: "list[int] | None" = None,
+            show_display: "bool | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["BenfenGetAddress"]:
+            return isinstance(msg, cls)
+
+    class BenfenAddress(protobuf.MessageType):
+        address: "str | None"
+
+        def __init__(
+            self,
+            *,
+            address: "str | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["BenfenAddress"]:
+            return isinstance(msg, cls)
+
+    class BenfenSignTx(protobuf.MessageType):
+        address_n: "list[int]"
+        raw_tx: "bytes"
+        data_initial_chunk: "bytes"
+        coin_type: "bytes | None"
+        data_length: "int | None"
+
+        def __init__(
+            self,
+            *,
+            raw_tx: "bytes",
+            address_n: "list[int] | None" = None,
+            data_initial_chunk: "bytes | None" = None,
+            coin_type: "bytes | None" = None,
+            data_length: "int | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["BenfenSignTx"]:
+            return isinstance(msg, cls)
+
+    class BenfenSignedTx(protobuf.MessageType):
+        public_key: "bytes"
+        signature: "bytes"
+
+        def __init__(
+            self,
+            *,
+            public_key: "bytes",
+            signature: "bytes",
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["BenfenSignedTx"]:
+            return isinstance(msg, cls)
+
+    class BenfenTxRequest(protobuf.MessageType):
+        data_length: "int | None"
+        public_key: "bytes | None"
+        signature: "bytes | None"
+
+        def __init__(
+            self,
+            *,
+            data_length: "int | None" = None,
+            public_key: "bytes | None" = None,
+            signature: "bytes | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["BenfenTxRequest"]:
+            return isinstance(msg, cls)
+
+    class BenfenTxAck(protobuf.MessageType):
+        data_chunk: "bytes"
+
+        def __init__(
+            self,
+            *,
+            data_chunk: "bytes",
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["BenfenTxAck"]:
+            return isinstance(msg, cls)
+
+    class BenfenSignMessage(protobuf.MessageType):
+        address_n: "list[int]"
+        message: "bytes"
+
+        def __init__(
+            self,
+            *,
+            message: "bytes",
+            address_n: "list[int] | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["BenfenSignMessage"]:
+            return isinstance(msg, cls)
+
+    class BenfenMessageSignature(protobuf.MessageType):
+        signature: "bytes"
+        address: "str"
+
+        def __init__(
+            self,
+            *,
+            signature: "bytes",
+            address: "str",
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["BenfenMessageSignature"]:
             return isinstance(msg, cls)
 
     class BinanceGetAddress(protobuf.MessageType):
@@ -1672,6 +1807,7 @@ if TYPE_CHECKING:
         network_id: "int"
         address_parameters: "CardanoAddressParametersType"
         derivation_type: "CardanoDerivationType"
+        chunkify: "bool | None"
 
         def __init__(
             self,
@@ -1681,6 +1817,7 @@ if TYPE_CHECKING:
             address_parameters: "CardanoAddressParametersType",
             derivation_type: "CardanoDerivationType",
             show_display: "bool | None" = None,
+            chunkify: "bool | None" = None,
         ) -> None:
             pass
 
@@ -1758,6 +1895,8 @@ if TYPE_CHECKING:
         has_collateral_return: "bool"
         total_collateral: "int | None"
         reference_inputs_count: "int"
+        chunkify: "bool | None"
+        tag_cbor_sets: "bool"
 
         def __init__(
             self,
@@ -1783,6 +1922,8 @@ if TYPE_CHECKING:
             has_collateral_return: "bool | None" = None,
             total_collateral: "int | None" = None,
             reference_inputs_count: "int | None" = None,
+            chunkify: "bool | None" = None,
+            tag_cbor_sets: "bool | None" = None,
         ) -> None:
             pass
 
@@ -1982,6 +2123,24 @@ if TYPE_CHECKING:
         def is_type_of(cls, msg: Any) -> TypeGuard["CardanoPoolParametersType"]:
             return isinstance(msg, cls)
 
+    class CardanoDRep(protobuf.MessageType):
+        type: "CardanoDRepType"
+        key_hash: "bytes | None"
+        script_hash: "bytes | None"
+
+        def __init__(
+            self,
+            *,
+            type: "CardanoDRepType",
+            key_hash: "bytes | None" = None,
+            script_hash: "bytes | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["CardanoDRep"]:
+            return isinstance(msg, cls)
+
     class CardanoTxCertificate(protobuf.MessageType):
         type: "CardanoCertificateType"
         path: "list[int]"
@@ -1989,6 +2148,8 @@ if TYPE_CHECKING:
         pool_parameters: "CardanoPoolParametersType | None"
         script_hash: "bytes | None"
         key_hash: "bytes | None"
+        deposit: "int | None"
+        drep: "CardanoDRep | None"
 
         def __init__(
             self,
@@ -1999,6 +2160,8 @@ if TYPE_CHECKING:
             pool_parameters: "CardanoPoolParametersType | None" = None,
             script_hash: "bytes | None" = None,
             key_hash: "bytes | None" = None,
+            deposit: "int | None" = None,
+            drep: "CardanoDRep | None" = None,
         ) -> None:
             pass
 
@@ -2026,56 +2189,58 @@ if TYPE_CHECKING:
         def is_type_of(cls, msg: Any) -> TypeGuard["CardanoTxWithdrawal"]:
             return isinstance(msg, cls)
 
-    class CardanoGovernanceRegistrationDelegation(protobuf.MessageType):
-        voting_public_key: "bytes"
+    class CardanoCVoteRegistrationDelegation(protobuf.MessageType):
+        vote_public_key: "bytes"
         weight: "int"
 
         def __init__(
             self,
             *,
-            voting_public_key: "bytes",
+            vote_public_key: "bytes",
             weight: "int",
         ) -> None:
             pass
 
         @classmethod
-        def is_type_of(cls, msg: Any) -> TypeGuard["CardanoGovernanceRegistrationDelegation"]:
+        def is_type_of(cls, msg: Any) -> TypeGuard["CardanoCVoteRegistrationDelegation"]:
             return isinstance(msg, cls)
 
-    class CardanoGovernanceRegistrationParametersType(protobuf.MessageType):
-        voting_public_key: "bytes | None"
+    class CardanoCVoteRegistrationParametersType(protobuf.MessageType):
+        vote_public_key: "bytes | None"
         staking_path: "list[int]"
-        reward_address_parameters: "CardanoAddressParametersType"
+        payment_address_parameters: "CardanoAddressParametersType | None"
         nonce: "int"
-        format: "CardanoGovernanceRegistrationFormat"
-        delegations: "list[CardanoGovernanceRegistrationDelegation]"
+        format: "CardanoCVoteRegistrationFormat"
+        delegations: "list[CardanoCVoteRegistrationDelegation]"
         voting_purpose: "int | None"
+        payment_address: "str | None"
 
         def __init__(
             self,
             *,
-            reward_address_parameters: "CardanoAddressParametersType",
             nonce: "int",
             staking_path: "list[int] | None" = None,
-            delegations: "list[CardanoGovernanceRegistrationDelegation] | None" = None,
-            voting_public_key: "bytes | None" = None,
-            format: "CardanoGovernanceRegistrationFormat | None" = None,
+            delegations: "list[CardanoCVoteRegistrationDelegation] | None" = None,
+            vote_public_key: "bytes | None" = None,
+            payment_address_parameters: "CardanoAddressParametersType | None" = None,
+            format: "CardanoCVoteRegistrationFormat | None" = None,
             voting_purpose: "int | None" = None,
+            payment_address: "str | None" = None,
         ) -> None:
             pass
 
         @classmethod
-        def is_type_of(cls, msg: Any) -> TypeGuard["CardanoGovernanceRegistrationParametersType"]:
+        def is_type_of(cls, msg: Any) -> TypeGuard["CardanoCVoteRegistrationParametersType"]:
             return isinstance(msg, cls)
 
     class CardanoTxAuxiliaryData(protobuf.MessageType):
-        governance_registration_parameters: "CardanoGovernanceRegistrationParametersType | None"
+        cvote_registration_parameters: "CardanoCVoteRegistrationParametersType | None"
         hash: "bytes | None"
 
         def __init__(
             self,
             *,
-            governance_registration_parameters: "CardanoGovernanceRegistrationParametersType | None" = None,
+            cvote_registration_parameters: "CardanoCVoteRegistrationParametersType | None" = None,
             hash: "bytes | None" = None,
         ) -> None:
             pass
@@ -2155,14 +2320,14 @@ if TYPE_CHECKING:
     class CardanoTxAuxiliaryDataSupplement(protobuf.MessageType):
         type: "CardanoTxAuxiliaryDataSupplementType"
         auxiliary_data_hash: "bytes | None"
-        governance_signature: "bytes | None"
+        cvote_registration_signature: "bytes | None"
 
         def __init__(
             self,
             *,
             type: "CardanoTxAuxiliaryDataSupplementType",
             auxiliary_data_hash: "bytes | None" = None,
-            governance_signature: "bytes | None" = None,
+            cvote_registration_signature: "bytes | None" = None,
         ) -> None:
             pass
 
@@ -2235,6 +2400,7 @@ if TYPE_CHECKING:
         message: "bytes"
         derivation_type: "CardanoDerivationType"
         network_id: "int"
+        address_type: "CardanoAddressType | None"
 
         def __init__(
             self,
@@ -2243,6 +2409,7 @@ if TYPE_CHECKING:
             derivation_type: "CardanoDerivationType",
             network_id: "int",
             address_n: "list[int] | None" = None,
+            address_type: "CardanoAddressType | None" = None,
         ) -> None:
             pass
 
@@ -6504,6 +6671,72 @@ if TYPE_CHECKING:
         def is_type_of(cls, msg: Any) -> TypeGuard["NEMCosignatoryModification"]:
             return isinstance(msg, cls)
 
+    class NeoGetAddress(protobuf.MessageType):
+        address_n: "list[int]"
+        show_display: "bool | None"
+
+        def __init__(
+            self,
+            *,
+            address_n: "list[int] | None" = None,
+            show_display: "bool | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["NeoGetAddress"]:
+            return isinstance(msg, cls)
+
+    class NeoAddress(protobuf.MessageType):
+        address: "str | None"
+        public_key: "bytes | None"
+
+        def __init__(
+            self,
+            *,
+            address: "str | None" = None,
+            public_key: "bytes | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["NeoAddress"]:
+            return isinstance(msg, cls)
+
+    class NeoSignTx(protobuf.MessageType):
+        address_n: "list[int]"
+        raw_tx: "bytes"
+        network_magic: "int"
+
+        def __init__(
+            self,
+            *,
+            raw_tx: "bytes",
+            address_n: "list[int] | None" = None,
+            network_magic: "int | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["NeoSignTx"]:
+            return isinstance(msg, cls)
+
+    class NeoSignedTx(protobuf.MessageType):
+        public_key: "bytes"
+        signature: "bytes"
+
+        def __init__(
+            self,
+            *,
+            public_key: "bytes",
+            signature: "bytes",
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["NeoSignedTx"]:
+            return isinstance(msg, cls)
+
     class NervosGetAddress(protobuf.MessageType):
         address_n: "list[int]"
         network: "str"
@@ -7163,12 +7396,12 @@ if TYPE_CHECKING:
             return isinstance(msg, cls)
 
     class SolanaAddress(protobuf.MessageType):
-        address: "str | None"
+        address: "str"
 
         def __init__(
             self,
             *,
-            address: "str | None" = None,
+            address: "str",
         ) -> None:
             pass
 
@@ -7193,17 +7426,71 @@ if TYPE_CHECKING:
             return isinstance(msg, cls)
 
     class SolanaSignedTx(protobuf.MessageType):
-        signature: "bytes | None"
+        signature: "bytes"
 
         def __init__(
             self,
             *,
-            signature: "bytes | None" = None,
+            signature: "bytes",
         ) -> None:
             pass
 
         @classmethod
         def is_type_of(cls, msg: Any) -> TypeGuard["SolanaSignedTx"]:
+            return isinstance(msg, cls)
+
+    class SolanaSignOffChainMessage(protobuf.MessageType):
+        address_n: "list[int]"
+        message: "bytes"
+        message_version: "SolanaOffChainMessageVersion"
+        message_format: "SolanaOffChainMessageFormat"
+        application_domain: "bytes | None"
+
+        def __init__(
+            self,
+            *,
+            message: "bytes",
+            address_n: "list[int] | None" = None,
+            message_version: "SolanaOffChainMessageVersion | None" = None,
+            message_format: "SolanaOffChainMessageFormat | None" = None,
+            application_domain: "bytes | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["SolanaSignOffChainMessage"]:
+            return isinstance(msg, cls)
+
+    class SolanaSignUnsafeMessage(protobuf.MessageType):
+        address_n: "list[int]"
+        message: "bytes"
+
+        def __init__(
+            self,
+            *,
+            message: "bytes",
+            address_n: "list[int] | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["SolanaSignUnsafeMessage"]:
+            return isinstance(msg, cls)
+
+    class SolanaMessageSignature(protobuf.MessageType):
+        signature: "bytes"
+        public_key: "bytes | None"
+
+        def __init__(
+            self,
+            *,
+            signature: "bytes",
+            public_key: "bytes | None" = None,
+        ) -> None:
+            pass
+
+        @classmethod
+        def is_type_of(cls, msg: Any) -> TypeGuard["SolanaMessageSignature"]:
             return isinstance(msg, cls)
 
     class StarcoinGetAddress(protobuf.MessageType):
