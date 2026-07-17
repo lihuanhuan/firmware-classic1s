@@ -80,8 +80,6 @@ void fsm_msgTonSignMessage(const TonSignMessage *msg) {
 
   if (ton_sign_message(msg, node, resp)) {
     msg_write(MessageType_MessageType_TonSignedMessage, resp);
-  } else {
-    fsm_sendFailure(FailureType_Failure_DataError, "Signing failed");
   }
 
   layoutHome();
@@ -102,8 +100,27 @@ void fsm_msgTonSignProof(const TonSignProof *msg) {
 
   if (ton_sign_proof(msg, node, resp)) {
     msg_write(MessageType_MessageType_TonSignedProof, resp);
-  } else {
-    fsm_sendFailure(FailureType_Failure_DataError, "Signing Proof failed");
+  }
+
+  layoutHome();
+}
+
+void fsm_msgTonSignData(const TonSignData *msg) {
+  CHECK_INITIALIZED
+  CHECK_PARAM(fsm_common_path_check(msg->address_n, msg->address_n_count,
+                                    COIN_TYPE, ED25519_NAME, true),
+              "Invalid path");
+  CHECK_PIN
+  RESP_INIT(TonSignedData);
+
+  HDNode *node = fsm_getDerivedNode(ED25519_NAME, msg->address_n,
+                                    msg->address_n_count, NULL);
+  if (!node) return;
+
+  hdnode_fill_public_key(node);
+
+  if (ton_sign_data(msg, node, resp)) {
+    msg_write(MessageType_MessageType_TonSignedData, resp);
   }
 
   layoutHome();
