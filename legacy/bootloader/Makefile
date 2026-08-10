@@ -7,6 +7,7 @@ OBJS += ../layout.o
 OBJS += startup.o
 OBJS += bootloader.o
 OBJS += usb.o
+OBJS += upgrade_policy.small.o
 OBJS += swd.o
 OBJS += updateble.o
 OBJS += layout_boot.o
