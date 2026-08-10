@@ -109,6 +109,40 @@ secbool upgrade_upload_target_allowed(upgrade_erase_target_t erase_target,
              : secfalse;
 }
 
+upgrade_image_target_t upgrade_wrapper_image_target(uint8_t flags) {
+  switch (flags) {
+    case UPGRADE_FLAG_MCU_PRESENT:
+    case UPGRADE_FLAG_MCU_PRESENT | UPGRADE_FLAG_SE_PRESENT:
+      return UPGRADE_IMAGE_TARGET_MCU;
+    case UPGRADE_FLAG_BLE_PRESENT:
+      return UPGRADE_IMAGE_TARGET_BLE;
+    default:
+      return UPGRADE_IMAGE_TARGET_NONE;
+  }
+}
+
+secbool upgrade_preflight_erase_allowed(
+    upgrade_file_format_t preflight_format,
+    upgrade_image_target_t preflight_target,
+    upgrade_erase_target_t requested_erase_target) {
+  if (requested_erase_target != UPGRADE_ERASE_TARGET_MCU &&
+      requested_erase_target != UPGRADE_ERASE_TARGET_BLE) {
+    return secfalse;
+  }
+
+  switch (preflight_format) {
+    case UPGRADE_FILE_FORMAT_NONE:
+      return preflight_target == UPGRADE_IMAGE_TARGET_NONE ? sectrue : secfalse;
+    case UPGRADE_FILE_FORMAT_OLD:
+    case UPGRADE_FILE_FORMAT_NEW:
+      return upgrade_upload_target_allowed(requested_erase_target,
+                                           preflight_target);
+    case UPGRADE_FILE_FORMAT_OLD_BODY:
+    default:
+      return secfalse;
+  }
+}
+
 secbool upgrade_wrapper_target_allowed(uint8_t flags,
                                        upgrade_image_target_t image_target) {
   if (image_target == UPGRADE_IMAGE_TARGET_MCU) {

@@ -53,6 +53,11 @@ secbool upgrade_mcu_install_allowed(upgrade_previous_state_t previous_state,
                                     uint32_t current_purpose);
 secbool upgrade_upload_target_allowed(upgrade_erase_target_t erase_target,
                                       upgrade_image_target_t image_target);
+upgrade_image_target_t upgrade_wrapper_image_target(uint8_t flags);
+secbool upgrade_preflight_erase_allowed(
+    upgrade_file_format_t preflight_format,
+    upgrade_image_target_t preflight_target,
+    upgrade_erase_target_t requested_erase_target);
 secbool upgrade_wrapper_target_allowed(uint8_t flags,
                                        upgrade_image_target_t image_target);
 secbool upgrade_wrapper_payload_allowed(uint8_t flags,
