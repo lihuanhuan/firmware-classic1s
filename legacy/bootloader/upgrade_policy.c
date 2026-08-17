@@ -59,8 +59,7 @@ secbool upgrade_mcu_metadata_matches(const upgrade_file_header_t *wrapper,
   }
 
   const module_upgrade_info_t *mcu = &wrapper->mcu_info;
-  if (mcu->version != image->onekey_version ||
-      mcu->purpose != image->purpose ||
+  if (mcu->version != image->onekey_version || mcu->purpose != image->purpose ||
       mcu->se_minimum_version != image->se_minimum_version ||
       mcu->length != UPGRADE_POLICY_HEADER_SIZE + image->codelen) {
     return secfalse;

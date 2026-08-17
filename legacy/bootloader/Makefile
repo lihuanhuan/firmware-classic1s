@@ -13,7 +13,6 @@ OBJS += updateble.o
 OBJS += layout_boot.o
 OBJS += thd89_boot.o
 OBJS += ../firmware/otp.small.o
-OBJS += ../firmware/se_chip.small.o
 
 # Overrides from libtrezor.
 # Objects ending with 'small.o' are built with -Os to make the bootloader smaller.

@@ -58,8 +58,6 @@
 #include "webusb.h"
 #include "winusb.h"
 
-#include "../firmware/se_chip.h"
-
 enum {
   STATE_READY,
   STATE_OPEN,
@@ -115,10 +113,10 @@ typedef struct {
   int wi;             // Word index (0-3)
 
   // Firmware verification
-  secbool se_isUpdate;           // Whether SE firmware is being updated
-  int old_was_signed;            // Whether old firmware was signed
-  uint32_t previous_version;     // Previous firmware version
-  uint32_t previous_purpose;     // Previous firmware purpose
+  secbool se_isUpdate;        // Whether SE firmware is being updated
+  int old_was_signed;         // Whether old firmware was signed
+  uint32_t previous_version;  // Previous firmware version
+  uint32_t previous_purpose;  // Previous firmware purpose
   upgrade_previous_state_t previous_state;
   upgrade_erase_target_t erase_target;
   secbool erase_storage;         // Whether to erase storage
@@ -211,8 +209,7 @@ static secbool process_old_format_upgrade_header(usbd_device *dev);
 static secbool validate_upgrade_wrapper(usbd_device *dev,
                                         const upgrade_file_header_t *hdr);
 static secbool consume_upgrade_wrapper(usbd_device *dev, const uint8_t *data,
-                                       uint32_t available,
-                                       uint32_t *consumed);
+                                       uint32_t available, uint32_t *consumed);
 static secbool validate_uploaded_old_header(usbd_device *dev);
 static void reset_upgrade_header_state(void);
 static void reset_update_session_state(void);
@@ -767,8 +764,8 @@ static secbool process_new_format_upgrade_header(usbd_device *dev) {
   // version
   uint32_t latest_se_version = current_se_version;
   if (upgrade_hdr->flags & UPGRADE_FLAG_SE_PRESENT) {
-    int se_version_diff = upgrade_version_compare(
-        upgrade_hdr->se_info.version, current_se_version);
+    int se_version_diff = upgrade_version_compare(upgrade_hdr->se_info.version,
+                                                  current_se_version);
     if (se_version_diff < 0) {
       handle_error(dev, FAILURE_PROCESS_ERROR, "SE downgrade", "not allowed.");
       return secfalse;
@@ -896,7 +893,11 @@ static secbool handle_wipe_device(usbd_device *dev) {
   }
   if (but) {
     erase_code_progress();
-    se_reset_storage();
+    if (!se_erase_storage_plaintext()) {
+      flash_state = STATE_END;
+      send_msg_failure(dev, FAILURE_PROCESS_ERROR, NULL);
+      return secfalse;
+    }
     flash_state = STATE_END;
     show_unplug("Device", "successfully wiped.");
     send_msg_success(dev);
@@ -1058,8 +1059,7 @@ static secbool handle_firmware_erase_ex(usbd_device *dev) {
 }
 
 static secbool consume_upgrade_wrapper(usbd_device *dev, const uint8_t *data,
-                                       uint32_t available,
-                                       uint32_t *consumed) {
+                                       uint32_t available, uint32_t *consumed) {
   if (msg_ctx.upgrade_header_pos > FLASH_FWHEADER_LEN) {
     handle_error(dev, FAILURE_PROCESS_ERROR, "Upgrade header", "overflow.");
     return secfalse;
@@ -1070,8 +1070,8 @@ static secbool consume_upgrade_wrapper(usbd_device *dev, const uint8_t *data,
 
   if (msg_ctx.preflight_format == UPGRADE_FILE_FORMAT_NEW) {
     if (upgrade_header_chunk_matches(msg_ctx.upgrade_header_buffer, data,
-                                     msg_ctx.upgrade_header_pos, count) !=
-        sectrue) {
+                                     msg_ctx.upgrade_header_pos,
+                                     count) != sectrue) {
       handle_error(dev, FAILURE_PROCESS_ERROR, "Upgrade header", "changed.");
       return secfalse;
     }
@@ -1105,10 +1105,9 @@ static secbool validate_uploaded_old_header(usbd_device *dev) {
       flash_pos < FLASH_FWHEADER_LEN) {
     return sectrue;
   }
-  if (upgrade_header_chunk_matches(
-          msg_ctx.upgrade_header_buffer,
-          (const uint8_t *)firmware_header_buffer, 0,
-          FLASH_FWHEADER_LEN) != sectrue) {
+  if (upgrade_header_chunk_matches(msg_ctx.upgrade_header_buffer,
+                                   (const uint8_t *)firmware_header_buffer, 0,
+                                   FLASH_FWHEADER_LEN) != sectrue) {
     handle_error(dev, FAILURE_PROCESS_ERROR, "Firmware header", "changed.");
     return secfalse;
   }
@@ -1739,7 +1738,7 @@ static void rx_callback(usbd_device *dev, uint8_t ep) {
             return;
           }
           if (!se_verify_firmware((uint8_t *)COMBINED_FW_HEADER,
-                                  FLASH_FWHEADER_LEN)) {
+                                  FLASH_FWHEADER_LEN, se_hdr.codelen)) {
             handle_error(dev, FAILURE_PROCESS_ERROR, "SE verify header",
                          "error.");
             return;
@@ -1792,7 +1791,10 @@ static void rx_callback(usbd_device *dev, uint8_t ep) {
                                 msg_ctx.fix_version_current);
 
       if (msg_ctx.erase_storage) {
-        se_reset_storage();
+        if (!se_erase_storage_plaintext()) {
+          handle_error(dev, FAILURE_PROCESS_ERROR, "SE erase", "error.");
+          return;
+        }
       }
 
       flash_enter();
