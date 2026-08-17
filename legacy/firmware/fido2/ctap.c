@@ -21,12 +21,14 @@
 #include "../layout2.h"
 #include "../protect.h"
 #include "../se_chip.h"
+#include "../se_thd89_v2.h"
 #include "../usb.h"
 #include "aes/aes.h"
 #include "buttons.h"
 #include "chacha20poly1305/rfc7539.h"
 #include "ctap_trans.h"
 #include "hmac.h"
+#include "memzero.h"
 #include "nist256p1.h"
 #include "rand.h"
 #include "util.h"
@@ -284,14 +286,20 @@ static int ctap_add_cose_key(CborEncoder *cose_key, uint8_t *x, uint8_t *y,
   return 0;
 }
 
+#if EMULATOR
 static int ctap_get_credrandom(uint8_t *cred_id, uint32_t cred_id_len,
                                uint8_t *credrandom) {
   Slip21Node node;
   const uint8_t *path[] = {(uint8_t *)"SLIP-0022", (uint8_t *)CRED_ID_VERSION,
                            (uint8_t *)"Encryption key"};
   const uint8_t path_len[3] = {9, CRED_ID_VERSION_SIZE, 14};
+  const uint8_t *seed = config_getSeed();
 
-  se_slip21_fido_node(node.data);
+  if (seed == NULL) {
+    memzero(credrandom, 32);
+    return CTAP1_ERR_OTHER;
+  }
+  slip21_from_seed(seed, 64, &node);
 
   for (size_t i = 0; i < 3; i++) {
     slip21_derive_path(&node, path[i], path_len[i]);
@@ -300,9 +308,11 @@ static int ctap_get_credrandom(uint8_t *cred_id, uint32_t cred_id_len,
   slip21_derive_path(&node, cred_id, cred_id_len);
 
   memcpy(credrandom, slip21_key(&node), 32);
+  memzero(&node, sizeof(node));
 
-  return 0;
+  return CTAP1_ERR_SUCCESS;
 }
+#endif
 
 static void ctap_reset_key_agreement(void) {
   static bool initialized = false;
@@ -326,7 +336,9 @@ static int ctap_make_extensions(CTAP_extensions *ext, uint8_t *cred_id,
   uint8_t hmac_secret_output[64];
   uint8_t shared_secret[65];
   uint8_t hmac[32];
+#if EMULATOR
   uint8_t credRandom[32];
+#endif
   uint8_t saltEnc[64], salt[64];
 
   uint8_t pubkey[65];
@@ -336,6 +348,9 @@ static int ctap_make_extensions(CTAP_extensions *ext, uint8_t *cred_id,
   memcpy(pubkey + 33, &ext->hmac_secret.keyAgreement.pubkey.y, 32);
 
   if (ext->hmac_secret_present == EXT_HMAC_SECRET_PARSED) {
+    if (ext->hmac_secret.saltLen != 32 && ext->hmac_secret.saltLen != 64) {
+      return CTAP2_ERR_EXTENSION_FIRST;
+    }
     memcpy(saltEnc, ext->hmac_secret.saltEnc, sizeof(saltEnc));
 
     ctap_reset_key_agreement();
@@ -350,23 +365,51 @@ static int ctap_make_extensions(CTAP_extensions *ext, uint8_t *cred_id,
     hmac_sha256_Update(&ctx256, saltEnc, ext->hmac_secret.saltLen);
     hmac_sha256_Final(&ctx256, hmac);
 
-    if (memcmp(ext->hmac_secret.saltAuth, hmac, 16) == 0) {
+    if (thd89_v2_constant_time_equal(ext->hmac_secret.saltAuth, hmac, 16)) {
       ctap_printf("saltAuth is valid\r\n");
     } else {
       ctap_printf("saltAuth is invalid\r\n");
+      memzero(shared_secret, sizeof(shared_secret));
+      memzero(hmac, sizeof(hmac));
+      memzero(saltEnc, sizeof(saltEnc));
+      memzero(salt, sizeof(salt));
+      memzero(&ctx256, sizeof(ctx256));
       return CTAP2_ERR_EXTENSION_FIRST;
     }
 
+#if EMULATOR
     // Generate credRandom
-    ctap_get_credrandom(cred_id, cred_id_len, credRandom);
+    if (ctap_get_credrandom(cred_id, cred_id_len, credRandom) !=
+        CTAP1_ERR_SUCCESS) {
+      memzero(shared_secret, sizeof(shared_secret));
+      memzero(hmac, sizeof(hmac));
+      memzero(credRandom, sizeof(credRandom));
+      memzero(saltEnc, sizeof(saltEnc));
+      memzero(salt, sizeof(salt));
+      return CTAP1_ERR_OTHER;
+    }
+#endif
 
     // Decrypt saltEnc
     aes_decrypt_ctx dec_ctx = {0};
-    uint8_t iv[16];
-    memset(iv, 0, sizeof(iv));
+    uint8_t iv[16] = {0};
     aes_decrypt_key256(shared_secret, &dec_ctx);
     aes_cbc_decrypt(saltEnc, salt, ext->hmac_secret.saltLen, iv, &dec_ctx);
 
+#if !EMULATOR
+    if (!se_fido_hmac_secret(cred_id, cred_id_len, salt,
+                             ext->hmac_secret.saltLen, hmac_secret_output)) {
+      memzero(shared_secret, sizeof(shared_secret));
+      memzero(hmac, sizeof(hmac));
+      memzero(saltEnc, sizeof(saltEnc));
+      memzero(salt, sizeof(salt));
+      memzero(hmac_secret_output, sizeof(hmac_secret_output));
+      memzero(iv, sizeof(iv));
+      memzero(&ctx256, sizeof(ctx256));
+      memzero(&dec_ctx, sizeof(dec_ctx));
+      return CTAP1_ERR_OTHER;
+    }
+#else
     // Generate outputs
     hmac_sha256_Init(&ctx256, credRandom, 32);
     hmac_sha256_Update(&ctx256, salt, ext->hmac_secret.saltLen);
@@ -377,16 +420,28 @@ static int ctap_make_extensions(CTAP_extensions *ext, uint8_t *cred_id,
       hmac_sha256_Update(&ctx256, salt + 32, 32);
       hmac_sha256_Final(&ctx256, hmac_secret_output + 32);
     }
+#endif
 
     // Encrypt for final output
     aes_encrypt_ctx enc_ctx = {0};
-    memset(iv, 0, sizeof(iv));
+    memzero(iv, sizeof(iv));
     aes_encrypt_key256(shared_secret, &enc_ctx);
     aes_cbc_encrypt(hmac_secret_output, hmac_secret_output,
                     ext->hmac_secret.saltLen, iv, &enc_ctx);
 
     extensions_used += 1;
     hmac_secret_output_is_valid = 1;
+    memzero(shared_secret, sizeof(shared_secret));
+    memzero(hmac, sizeof(hmac));
+#if EMULATOR
+    memzero(credRandom, sizeof(credRandom));
+#endif
+    memzero(saltEnc, sizeof(saltEnc));
+    memzero(salt, sizeof(salt));
+    memzero(iv, sizeof(iv));
+    memzero(&ctx256, sizeof(ctx256));
+    memzero(&dec_ctx, sizeof(dec_ctx));
+    memzero(&enc_ctx, sizeof(enc_ctx));
   } else if (ext->hmac_secret_present == EXT_HMAC_SECRET_REQUESTED) {
     extensions_used += 1;
     hmac_secret_requested_is_valid = 1;
@@ -451,13 +506,42 @@ static int ctap_make_extensions(CTAP_extensions *ext, uint8_t *cred_id,
   return 0;
 }
 
+static int ctap_next_credential_counter(uint32_t *counter) {
+  if (counter == NULL || !config_nextU2FCounter(counter)) {
+    return CTAP1_ERR_OTHER;
+  }
+  if (*counter == 0 && !config_nextU2FCounter(counter)) {
+    return CTAP1_ERR_OTHER;
+  }
+  return CTAP1_ERR_SUCCESS;
+}
+
 static int ctap_generate_credential_id(CTAP_makeCredential mc, uint32_t counter,
                                        uint8_t *cred_id,
                                        uint16_t *cred_id_len) {
-  CborEncoder credential_id;
-  uint8_t credential_id_buf[CRED_ID_MAX_LEN];
-
+  CborEncoder credential_id = {0};
+  CborEncoder map = {0};
+  uint8_t credential_id_buf[CRED_ID_MAX_LEN] = {0};
+  uint8_t rp_id_hash[32] = {0};
+  size_t plaintext_len = 0;
+  uint16_t output_capacity = 0;
   uint8_t element_count = 0;
+  CborError ret = CborNoError;
+  int result = CTAP1_ERR_OTHER;
+#if EMULATOR
+  Slip21Node node = {0};
+  uint8_t key[32] = {0};
+  uint8_t iv[12] = {0};
+  uint8_t tag[16] = {0};
+  chacha20poly1305_ctx ctx = {0};
+#endif
+
+  if (cred_id == NULL || cred_id_len == NULL) {
+    goto cleanup;
+  }
+  output_capacity = *cred_id_len;
+  memzero(cred_id, output_capacity);
+  *cred_id_len = 0;
 
   if (strlen(mc.rp.id) > 0) {
     element_count++;
@@ -491,104 +575,96 @@ static int ctap_generate_credential_id(CTAP_makeCredential mc, uint32_t counter,
 
   // algorithm,curve
 
-  CborEncoder map;
-
   cbor_encoder_init(&credential_id, credential_id_buf,
                     sizeof(credential_id_buf), 0);
 
-  int ret = cbor_encoder_create_map(&credential_id, &map, element_count);
-  check_ret(ret);
+  ret = cbor_encoder_create_map(&credential_id, &map, element_count);
+  if (ret != CborNoError) goto cleanup;
   {
     if (strlen(mc.rp.id) > 0) {
       ret = cbor_encode_uint(&map, CRED_ID_RP_ID);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
       ret = cbor_encode_text_stringz(&map, mc.rp.id);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
     }
 
     if (strlen(mc.rp.name) > 0) {
       ret = cbor_encode_uint(&map, CRED_ID_RP_NAME);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
       ret = cbor_encode_text_stringz(&map, mc.rp.name);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
     }
 
     if (mc.credInfo.user.id_size > 0) {
       ret = cbor_encode_uint(&map, CRED_ID_USER_ID);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
       ret = cbor_encode_byte_string(&map, mc.credInfo.user.id,
                                     mc.credInfo.user.id_size);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
     }
 
     if (strlen(mc.credInfo.user.name) > 0) {
       ret = cbor_encode_uint(&map, CRED_ID_USER_NAME);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
       ret = cbor_encode_text_stringz(&map, mc.credInfo.user.name);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
     }
 
     if (strlen(mc.credInfo.user.displayName) > 0) {
       ret = cbor_encode_uint(&map, CRED_ID_USER_DISPLAY_NAME);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
       ret = cbor_encode_text_stringz(&map, mc.credInfo.user.displayName);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
     }
 
     ret = cbor_encode_uint(&map, CRED_ID_CREATION_TIME);
-    check_ret(ret);
+    if (ret != CborNoError) goto cleanup;
     ret = cbor_encode_uint(&map, counter);
-    check_ret(ret);
+    if (ret != CborNoError) goto cleanup;
 
     if (mc.extensions.hmac_secret_present == EXT_HMAC_SECRET_REQUESTED) {
       ret = cbor_encode_uint(&map, CRED_ID_HMAC_SECRET);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
       ret = cbor_encode_boolean(&map, 1);
-      check_ret(ret);
+      if (ret != CborNoError) goto cleanup;
     }
 
     ret = cbor_encode_uint(&map, CRED_ID_SIGN_COUNT);
-    check_ret(ret);
+    if (ret != CborNoError) goto cleanup;
     ret = cbor_encode_boolean(&map, 1);
-    check_ret(ret);
+    if (ret != CborNoError) goto cleanup;
 
     ret = cbor_encoder_close_container(&credential_id, &map);
-    check_ret(ret);
+    if (ret != CborNoError) goto cleanup;
   }
-  uint16_t credential_id_len =
+  plaintext_len =
       cbor_encoder_get_buffer_size(&credential_id, credential_id_buf);
 
   // version + iv + ciphertext + tag
-  if (*cred_id_len < credential_id_len + 32) {
+  if (plaintext_len == 0 ||
+      plaintext_len > SE_FIDO_CREDENTIAL_PLAINTEXT_MAX_LEN ||
+      output_capacity < plaintext_len + 32U) {
     ctap_printf("credential_id_len too small\n");
-    return CTAP1_ERR_OTHER;
+    goto cleanup;
   }
 
-  ctap_printf("credential_id_len: %d\n", credential_id_len);
-  dump_hex1(TAG_GREEN, credential_id_buf, credential_id_len);
-
-  Slip21Node node;
+#if EMULATOR
   const uint8_t *path[] = {(uint8_t *)"SLIP-0022", (uint8_t *)CRED_ID_VERSION,
                            (uint8_t *)"Encryption key"};
   const uint8_t path_len[3] = {9, CRED_ID_VERSION_SIZE, 14};
+  const uint8_t *seed = config_getSeed();
 
-  se_slip21_fido_node(node.data);
-
-  ctap_printf("root node.data:\n");
-  dump_hex1(TAG_GREEN, node.data, sizeof(node.data));
+  if (seed == NULL) {
+    goto cleanup;
+  }
+  slip21_from_seed(seed, 64, &node);
 
   for (size_t i = 0; i < 3; i++) {
     slip21_derive_path(&node, path[i], path_len[i]);
   }
 
-  ctap_printf("derived node.data:\n");
-  dump_hex1(TAG_GREEN, node.data, sizeof(node.data));
-
-  uint8_t key[32], iv[12], tag[16], rp_id_hash[32];
   memcpy(key, slip21_key(&node), 32);
   random_buffer(iv, 12);
-
-  chacha20poly1305_ctx ctx = {0};
 
   sha256_Raw((uint8_t *)mc.rp.id, mc.rp.size, rp_id_hash);
 
@@ -599,16 +675,40 @@ static int ctap_generate_credential_id(CTAP_makeCredential mc, uint32_t counter,
   memcpy(cred_id + 4, iv, 12);
 
   chacha20poly1305_encrypt(&ctx, credential_id_buf, cred_id + 16,
-                           credential_id_len);
-  rfc7539_finish(&ctx, sizeof(rp_id_hash), credential_id_len, tag);
+                           plaintext_len);
+  rfc7539_finish(&ctx, sizeof(rp_id_hash), plaintext_len, tag);
 
-  memcpy(cred_id + 16 + credential_id_len, tag, 16);
+  memcpy(cred_id + 16 + plaintext_len, tag, 16);
 
-  *cred_id_len = credential_id_len + 16 + 16;
+  *cred_id_len = (uint16_t)plaintext_len + 16U + 16U;
+  result = CTAP1_ERR_SUCCESS;
+#else
+  sha256_Raw((uint8_t *)mc.rp.id, mc.rp.size, rp_id_hash);
+  *cred_id_len = output_capacity;
+  if (se_fido_credential_encrypt(rp_id_hash, credential_id_buf,
+                                 (uint16_t)plaintext_len, cred_id,
+                                 cred_id_len) == sectrue) {
+    result = CTAP1_ERR_SUCCESS;
+  }
+#endif
 
-  ctap_printf("cred_id:");
-  dump_hex1(TAG_GREEN, cred_id, *cred_id_len);
-  return CTAP1_ERR_SUCCESS;
+cleanup:
+  memzero(credential_id_buf, sizeof(credential_id_buf));
+  memzero(rp_id_hash, sizeof(rp_id_hash));
+#if EMULATOR
+  memzero(&node, sizeof(node));
+  memzero(key, sizeof(key));
+  memzero(iv, sizeof(iv));
+  memzero(tag, sizeof(tag));
+  memzero(&ctx, sizeof(ctx));
+#endif
+  if (result != CTAP1_ERR_SUCCESS && cred_id != NULL) {
+    memzero(cred_id, output_capacity);
+  }
+  if (result != CTAP1_ERR_SUCCESS && cred_id_len != NULL) {
+    *cred_id_len = 0;
+  }
+  return result;
 }
 
 static int ctap_derive_credential_pubkey(uint8_t type, uint8_t *cred_id,
@@ -859,16 +959,22 @@ uint8_t ctap_add_attest_statement(CborEncoder *map, uint8_t *sigder, int len) {
 // Return 1 if credential belongs to this token
 int ctap_authenticate_credential_data(const uint8_t *rp_id_hash,
                                       CTAP_credentialDescriptor *desc) {
+#if !EMULATOR
+  uint8_t candidate_plaintext[SE_FIDO_CREDENTIAL_PLAINTEXT_MAX_LEN] = {0};
+  uint8_t authenticated_plaintext[SE_FIDO_CREDENTIAL_PLAINTEXT_MAX_LEN] = {0};
+  uint8_t rp_id_hash_buf[32] = {0};
+  uint16_t candidate_len = sizeof(candidate_plaintext);
+  uint16_t authenticated_len = sizeof(authenticated_plaintext);
+  Credential_ID_Info candidate = {0};
+  int authenticated = 0;
+#else
   uint8_t key[32], iv[12], tag[16], id_tag[16], rp_id_hash_buf[32];
 
   uint8_t cred_id_decrypted[512];
 
   static Slip21Node node;
   static bool node_initialized = false;
-
-  ctap_printf("ctap_authenticate_credential len %d, type %d:",
-              desc->cred_id_len, desc->type);
-  dump_hex1(NULL, desc->cred_id, desc->cred_id_len);
+#endif
 
   if (desc->type == PUB_KEY_CRED_UNKNOWN) {
     return 0;
@@ -876,13 +982,51 @@ int ctap_authenticate_credential_data(const uint8_t *rp_id_hash,
 
   if ((desc->cred_id_len > CTAP_CREDENTIAL_ID_MIN_SIZE) &&
       (memcmp(desc->cred_id, CRED_ID_VERSION, CRED_ID_VERSION_SIZE) == 0)) {
+#if !EMULATOR
+    if (rp_id_hash != NULL) {
+      memcpy(rp_id_hash_buf, rp_id_hash, sizeof(rp_id_hash_buf));
+    } else {
+      if (!se_fido_credential_peek(desc->cred_id, desc->cred_id_len,
+                                   candidate_plaintext, &candidate_len) ||
+          ctap_parse_credential_id(&candidate, candidate_plaintext,
+                                   candidate_len) != CTAP1_ERR_SUCCESS ||
+          candidate.rp.size == 0) {
+        goto device_cleanup;
+      }
+      sha256_Raw((uint8_t *)candidate.rp.id, candidate.rp.size, rp_id_hash_buf);
+      memzero(&candidate, sizeof(candidate));
+      memzero(candidate_plaintext, sizeof(candidate_plaintext));
+      candidate_len = 0;
+    }
+    if (!se_fido_credential_decrypt(rp_id_hash_buf, desc->cred_id,
+                                    desc->cred_id_len, authenticated_plaintext,
+                                    &authenticated_len) ||
+        ctap_parse_credential_id(&desc->credential, authenticated_plaintext,
+                                 authenticated_len) != CTAP1_ERR_SUCCESS) {
+      memzero(&desc->credential, sizeof(desc->credential));
+      goto device_cleanup;
+    }
+    desc->type = PUB_KEY_CRED_PUB_KEY;
+    authenticated = 1;
+
+  device_cleanup:
+    memzero(&candidate, sizeof(candidate));
+    memzero(candidate_plaintext, sizeof(candidate_plaintext));
+    memzero(authenticated_plaintext, sizeof(authenticated_plaintext));
+    memzero(rp_id_hash_buf, sizeof(rp_id_hash_buf));
+    return authenticated;
+#else
     if (!node_initialized) {
       const uint8_t *path[] = {(uint8_t *)"SLIP-0022",
                                (uint8_t *)CRED_ID_VERSION,
                                (uint8_t *)"Encryption key"};
       const uint8_t path_len[3] = {9, CRED_ID_VERSION_SIZE, 14};
+      const uint8_t *seed = config_getSeed();
 
-      se_slip21_fido_node(node.data);
+      if (seed == NULL) {
+        return 0;
+      }
+      slip21_from_seed(seed, 64, &node);
       for (size_t i = 0; i < 3; i++) {
         slip21_derive_path(&node, path[i], path_len[i]);
       }
@@ -912,7 +1056,7 @@ int ctap_authenticate_credential_data(const uint8_t *rp_id_hash,
                              desc->cred_id_len - 32);
     rfc7539_finish(&ctx, 32, desc->cred_id_len - 32, id_tag);
 
-    if (memcmp(tag, id_tag, 16) == 0) {
+    if (thd89_v2_constant_time_equal(tag, id_tag, 16)) {
       if (rp_id_hash != NULL) {
         ctap_parse_credential_id(&desc->credential, cred_id_decrypted,
                                  desc->cred_id_len - 32);
@@ -921,6 +1065,7 @@ int ctap_authenticate_credential_data(const uint8_t *rp_id_hash,
       return 1;
     }
     return 0;
+#endif
   }
   if (desc->cred_id_len == CTAP1_KEY_HANDLE_SIZE) {
     ctap_printf("CTAP1 key handle\n");
@@ -1085,10 +1230,9 @@ refresh:
   }
 
   ctap_printf("FIDO2 Make Credential\n");
-  uint32_t creation_time = config_nextU2FCounter();
-  if (creation_time == 0) {
-    // skip the first counter value
-    creation_time = config_nextU2FCounter();
+  uint32_t creation_time = 0;
+  if (ctap_next_credential_counter(&creation_time) != CTAP1_ERR_SUCCESS) {
+    return CTAP1_ERR_OTHER;
   }
 
   uint8_t cred_id_buf[CRED_ID_MAX_LEN];
@@ -2028,7 +2172,10 @@ uint8_t ctap_get_assertion(CborEncoder *encoder, uint8_t *request, int length) {
   cred = &GA.creds[getAssertionState.index];
   uint32_t auth_data_buf_sz = sizeof(CTAP_authDataHeader);
 
-  uint32_t counter = config_nextU2FCounter();
+  uint32_t counter = 0;
+  if (!config_nextU2FCounter(&counter)) {
+    return CTAP1_ERR_OTHER;
+  }
   ret = ctap_get_assertion_auth_header(&GA, counter,
                                        &getAssertionState.buf.authData);
   check_retr(ret);
@@ -2104,10 +2251,8 @@ uint8_t ctap_update_pin_if_verified(uint8_t *pinEnc, int len,
   }
   hmac_sha256_Final(&ctx256, hmac);
 
-  if (memcmp(hmac, pinAuth, 16) != 0) {
+  if (!thd89_v2_constant_time_equal(hmac, pinAuth, 16)) {
     ctap_printf("pinAuth failed for update pin\n");
-    dump_hex1(TAG_ERR, hmac, 16);
-    dump_hex1(TAG_ERR, pinAuth, 16);
     return CTAP2_ERR_PIN_AUTH_INVALID;
   }
 
@@ -2132,9 +2277,6 @@ uint8_t ctap_update_pin_if_verified(uint8_t *pinEnc, int len,
   if (ret < NEW_PIN_MIN_SIZE || ret >= NEW_PIN_MAX_SIZE) {
     ctap_printf("new PIN is too short or too long [%d bytes]\n", ret);
     return CTAP2_ERR_PIN_POLICY_VIOLATION;
-  } else {
-    ctap_printf("new pin: %s [%d bytes]\n", pinEnc, ret);
-    dump_hex1(TAG_CP, pinEnc, ret);
   }
 
   return 0;
@@ -2156,9 +2298,6 @@ uint8_t ctap_add_pin_if_verified(uint8_t *pinTokenEnc, uint8_t *platform_pubkey,
 
   aes_decrypt_key256(shared_secret, &dec_ctx);
   aes_cbc_decrypt(pinHashEnc, pinHashEnc, 16, iv, &dec_ctx);
-
-  ctap_printf("pinHashEnc: ");
-  dump_hex1(TAG_ERR, pinHashEnc, 16);
 
   random_buffer(PIN_TOKEN, PIN_TOKEN_SIZE);
   memmove(pinTokenEnc, PIN_TOKEN, PIN_TOKEN_SIZE);

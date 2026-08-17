@@ -60,6 +60,13 @@ bool resident_credential_store(const uint8_t *rp_id_hash,
   UI_WAIT_CALLBACK ui_callback = se_get_ui_callback();
   uint8_t percent = 0;
 
+  if (rp_id_hash == NULL || user_id == NULL || cred_id == NULL ||
+      cred_id_len < SE_FIDO_CREDENTIAL_ID_MIN_LEN ||
+      cred_id_len > sizeof(cred_id_storage.credential_id) ||
+      user_id_len > USER_ID_MAX_SIZE) {
+    return false;
+  }
+
   for (uint32_t i = 0; i < FIDO2_RESIDENT_CREDENTIALS_COUNT; i++) {
     percent = (i + 1) * 100 / FIDO2_RESIDENT_CREDENTIALS_COUNT;
     ui_callback(_(C__PROCESSING_ETC), percent * 10);

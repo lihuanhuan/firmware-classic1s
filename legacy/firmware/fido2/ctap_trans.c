@@ -50,6 +50,7 @@
 
 #include "ctap.h"
 #include "ctap_trans.h"
+#include "factory_channel.h"
 #include "memory.h"
 #include "se_chip.h"
 #include "u2f.h"
@@ -98,7 +99,6 @@ typedef enum {
 
 bool u2f_init_command = false;
 static bool next_page = false;
-static bool se_seed_cached = false;
 static volatile bool usb_hid_tiny = false;
 extern bool protectAbortedByFIDO;
 
@@ -160,7 +160,26 @@ typedef struct {
   uint8_t cmd;
 } U2F_ReadBuffer;
 
-U2F_ReadBuffer *reader;
+static U2F_ReadBuffer u2f_read_buffer;
+static U2F_ReadBuffer *reader;
+
+static bool u2fhid_reader_acquire(void) {
+  if (reader != NULL) {
+    return false;
+  }
+
+  usb_hid_tiny = true;
+  memzero(&u2f_read_buffer, sizeof(u2f_read_buffer));
+  reader = &u2f_read_buffer;
+  return true;
+}
+
+static void u2fhid_reader_release(void) {
+  usb_hid_tiny = true;
+  reader = NULL;
+  memzero(&u2f_read_buffer, sizeof(u2f_read_buffer));
+  usb_hid_tiny = false;
+}
 
 bool dialog_is_busy(void) {
   // if (dialog_manager.is_busy) {
@@ -261,8 +280,6 @@ void u2fhid_init_cmd(const U2FHID_FRAME *f) {
 }
 
 void u2fhid_read_start(const U2FHID_FRAME *f) {
-  U2F_ReadBuffer readbuffer = {0};
-  memzero(&readbuffer, sizeof(readbuffer));
   if (!(f->type & TYPE_INIT)) {
     return;
   }
@@ -273,12 +290,15 @@ void u2fhid_read_start(const U2FHID_FRAME *f) {
     return;
   }
 
-  if ((unsigned)MSG_LEN(*f) > sizeof(reader->buf)) {
+  if ((unsigned)MSG_LEN(*f) > sizeof(u2f_read_buffer.buf)) {
     send_u2fhid_error(f->cid, ERR_INVALID_LEN);
     return;
   }
 
-  reader = &readbuffer;
+  if (!u2fhid_reader_acquire()) {
+    send_u2fhid_error(f->cid, ERR_CHANNEL_BUSY);
+    return;
+  }
   u2fhid_init_cmd(f);
 
   for (;;) {
@@ -293,8 +313,7 @@ void u2fhid_read_start(const U2FHID_FRAME *f) {
           // timeout
           send_u2fhid_error(cid, ERR_MSG_TIMEOUT);
           cid = 0;
-          reader = 0;
-          usb_hid_tiny = false;
+          u2fhid_reader_release();
           layoutHome();
           return;
         }
@@ -304,6 +323,7 @@ void u2fhid_read_start(const U2FHID_FRAME *f) {
 
     if (transport_type == TRANSPORT_BLE) {
       send_u2fhid_error(cid, ERR_CHANNEL_BUSY);
+      u2fhid_reader_release();
       return;
     }
     transport_type = TRANSPORT_HID;
@@ -376,6 +396,7 @@ void u2fhid_read_start(const U2FHID_FRAME *f) {
         }
       }
       if (reader == 0) {
+        u2fhid_reader_release();
         layoutHome();
         return;
       }
@@ -384,6 +405,7 @@ void u2fhid_read_start(const U2FHID_FRAME *f) {
     dialog_update_state(false, 0);
 
     if (dialog_manager.last_req_state == REQUEST_PIN) {
+      u2fhid_reader_release();
       return;
     }
 
@@ -391,7 +413,7 @@ void u2fhid_read_start(const U2FHID_FRAME *f) {
       dialog_manager.last_req_state = INIT;
       next_page = false;
       cid = 0;
-      reader = 0;
+      u2fhid_reader_release();
       layoutHome();
       return;
     }
@@ -573,8 +595,8 @@ void u2fhid_msg(const APDU *a, uint32_t len) {
   }
 
 #if !EMULATOR
-  uint8_t buffer[1024 + 64];
-  uint16_t resp_len = sizeof(buffer);
+  uint8_t buffer[FACTORY_CHANNEL_RESPONSE_BUFFER_SIZE];
+  uint16_t resp_len = TRANSPORT_MAX_RESPONSE;
 #endif
 
   switch (a->ins) {
@@ -605,13 +627,18 @@ void u2fhid_msg(const APDU *a, uint32_t len) {
       break;
     default:
 #if !EMULATOR
+      if (!se_isFactoryMode()) {
+        send_u2f_error(U2F_SW_INS_NOT_SUPPORTED);
+        break;
+      }
 
       if (!thd89_transmit((uint8_t *)&(a->cla), len, buffer, &resp_len)) {
         send_u2f_error(thd89_last_error());
+      } else if (!factory_channel_append_status(buffer, &resp_len,
+                                                U2F_SW_NO_ERROR)) {
+        send_u2f_error(U2F_SW_WRONG_LENGTH);
       } else {
-        buffer[resp_len] = U2F_SW_NO_ERROR >> 8 & 0xFF;
-        buffer[resp_len + 1] = U2F_SW_NO_ERROR & 0xFF;
-        send_u2f_msg(buffer, resp_len + 2);
+        send_u2f_msg(buffer, resp_len);
       }
 #endif
       break;
@@ -792,7 +819,6 @@ static const HDNode *validateKeyHandle(const uint8_t app_id[],
 void u2f_register(const APDU *a) {
   static U2F_REGISTER_REQ last_req;
   const U2F_REGISTER_REQ *req = (U2F_REGISTER_REQ *)a->data;
-  uint8_t percent = 0;
 
   if (!config_isInitialized()) {
     send_u2f_error(U2F_SW_CONDITIONS_NOT_SATISFIED);
@@ -810,22 +836,12 @@ void u2f_register(const APDU *a) {
     return;
   }
 
-  if (!se_seed_cached) {
-    UI_WAIT_CALLBACK ui_callback = se_get_ui_callback();
-    secbool ret = se_gen_root_node(&percent);
-    if (ret) {
-      if (percent == 100) {
-        se_seed_cached = true;
-        return;
-      } else if (ui_callback) {
-        ui_callback(_(C__PROCESSING_ETC), percent * 10);
-        send_u2f_error(U2F_SW_CONDITIONS_NOT_SATISFIED);
-        return;
-      }
-    } else {
+  if (!se_fido_seed_is_ready()) {
+    if (!check_se_fido_seed(NULL)) {
       send_u2f_error(U2F_SW_WRONG_DATA);
       return;
     }
+    return;
   }
 
   // If this request is different from last request, reset state machine
@@ -956,7 +972,6 @@ void u2f_register(const APDU *a) {
 void u2f_authenticate(const APDU *a) {
   const U2F_AUTHENTICATE_REQ *req = (U2F_AUTHENTICATE_REQ *)a->data;
   static U2F_AUTHENTICATE_REQ last_req;
-  uint8_t percent = 0;
 
   if (!config_isInitialized()) {
     send_u2f_error(U2F_SW_CONDITIONS_NOT_SATISFIED);
@@ -987,22 +1002,12 @@ void u2f_authenticate(const APDU *a) {
     return;
   }
 
-  if (!se_seed_cached) {
-    UI_WAIT_CALLBACK ui_callback = se_get_ui_callback();
-    secbool ret = se_gen_root_node(&percent);
-    if (ret) {
-      if (percent == 100) {
-        se_seed_cached = true;
-        return;
-      } else if (ui_callback) {
-        ui_callback(_(C__PROCESSING_ETC), percent * 10);
-        send_u2f_error(U2F_SW_CONDITIONS_NOT_SATISFIED);
-        return;
-      }
-    } else {
+  if (!se_fido_seed_is_ready()) {
+    if (!check_se_fido_seed(NULL)) {
       send_u2f_error(U2F_SW_WRONG_DATA);
       return;
     }
+    return;
   }
 
 #if EMULATOR
@@ -1072,7 +1077,8 @@ void u2f_authenticate(const APDU *a) {
     uint8_t sig[64] = {0};
     resp->flags = a->p1 == U2F_AUTH_ENFORCE ? U2F_AUTH_FLAG_TUP : 0;
 #if EMULATOR
-    const uint32_t ctr = config_nextU2FCounter();
+    uint32_t ctr = 0;
+    (void)config_nextU2FCounter(&ctr);
     resp->ctr[0] = ctr >> 24 & 0xff;
     resp->ctr[1] = ctr >> 16 & 0xff;
     resp->ctr[2] = ctr >> 8 & 0xff;
@@ -1141,6 +1147,24 @@ void send_u2f_msg(const uint8_t *data, const uint32_t len) {
 
 void send_cbor_error(const uint8_t err) {
   send_u2fhid_msg(U2FHID_CBOR, (uint8_t *)&err, 1);
+}
+
+static CTAP_RESPONSE ctap_response;
+static bool ctap_response_in_use;
+
+static CTAP_RESPONSE *ctap_response_acquire(void) {
+  if (ctap_response_in_use) {
+    return NULL;
+  }
+
+  ctap_response_in_use = true;
+  memzero(&ctap_response, sizeof(ctap_response));
+  return &ctap_response;
+}
+
+static void ctap_response_release(void) {
+  memzero(&ctap_response, sizeof(ctap_response));
+  ctap_response_in_use = false;
 }
 
 void ctap_hid_keepalive_status(void) {
@@ -1217,25 +1241,28 @@ uint8_t ctap_cbor_cmd(const uint8_t *data, const uint32_t len) {
     return 0;
   }
 
-  CTAP_RESPONSE resp;
-  memset(&resp, 0, sizeof(resp));
+  if (dialog_manager.is_busy) {
+    ctap_error(CTAP1_ERR_CHANNEL_BUSY);
+    return 0;
+  }
+
+  CTAP_RESPONSE *resp = ctap_response_acquire();
+  if (resp == NULL) {
+    ctap_error(CTAP1_ERR_CHANNEL_BUSY);
+    return 0;
+  }
 
   CborEncoder encoder;
   memset(&encoder, 0, sizeof(CborEncoder));
 
-  uint8_t *ctap_status = resp.data;
-  uint8_t *ctap_data = resp.data + 1;
-  uint32_t ctap_data_len = sizeof(resp.data) - 1;
+  uint8_t *ctap_status = resp->data;
+  uint8_t *ctap_data = resp->data + 1;
+  uint32_t ctap_data_len = sizeof(resp->data) - 1;
 
   cbor_encoder_init(&encoder, ctap_data, ctap_data_len, 0);
 
   uint8_t cmd = data[0];
   uint8_t status = CTAP1_ERR_SUCCESS;
-
-  if (dialog_manager.is_busy) {
-    ctap_error(CTAP1_ERR_CHANNEL_BUSY);
-    return 0;
-  }
 
   ctap_hid_cancel_clear();
   dialog_manager.is_busy = true;
@@ -1252,6 +1279,7 @@ uint8_t ctap_cbor_cmd(const uint8_t *data, const uint32_t len) {
   if (status != CTAP1_ERR_SUCCESS) {
     dialog_manager.is_busy = false;
     send_cbor_error(status);
+    ctap_response_release();
     return 0;
   }
 
@@ -1267,10 +1295,10 @@ uint8_t ctap_cbor_cmd(const uint8_t *data, const uint32_t len) {
       }
       if (status == CTAP1_ERR_SUCCESS) {
         *ctap_status = CTAP1_ERR_SUCCESS;
-        resp.length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
+        resp->length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
       } else {
         *ctap_status = status;
-        resp.length = 1;
+        resp->length = 1;
       }
       break;
     case CTAP_GET_ASSERTION:
@@ -1284,45 +1312,46 @@ uint8_t ctap_cbor_cmd(const uint8_t *data, const uint32_t len) {
       }
       if (status == CTAP1_ERR_SUCCESS) {
         *ctap_status = CTAP1_ERR_SUCCESS;
-        resp.length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
+        resp->length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
       } else {
         *ctap_status = status;
-        resp.length = 1;
+        resp->length = 1;
       }
       break;
     case CTAP_GET_INFO:
       ctap_get_info(&encoder);
       *ctap_status = CTAP1_ERR_SUCCESS;
-      resp.length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
+      resp->length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
       break;
     case CTAP_CLIENT_PIN:
       status = ctap_client_pin(&encoder, (uint8_t *)(data + 1), len - 1);
       *ctap_status = status;
-      resp.length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
+      resp->length = cbor_encoder_get_buffer_size(&encoder, ctap_data) + 1;
       break;
     case CTAP_RESET:
       *ctap_status = CTAP1_ERR_SUCCESS;
-      resp.length = 1;
+      resp->length = 1;
       break;
     case GET_NEXT_ASSERTION:
       *ctap_status = CTAP2_ERR_NOT_ALLOWED;
-      resp.length = 1;
+      resp->length = 1;
       break;
     default:
       *ctap_status = CTAP1_ERR_INVALID_COMMAND;
-      resp.length = 1;
+      resp->length = 1;
       break;
   }
   dialog_manager.is_busy = false;
   ctap_printf("ctap response:");
-  dump_hex1(NULL, resp.data, resp.length);
+  dump_hex1(NULL, resp->data, resp->length);
   if (transport_type == TRANSPORT_BLE) {
     ctap_printf("ble send response\n");
-    ctap_ble_u2f_send(U2FHID_MSG, resp.data, resp.length);
+    ctap_ble_u2f_send(U2FHID_MSG, resp->data, resp->length);
   } else {
     ctap_printf("hid send response\n");
-    send_u2fhid_msg(U2FHID_CBOR, resp.data, resp.length);
+    send_u2fhid_msg(U2FHID_CBOR, resp->data, resp->length);
   }
+  ctap_response_release();
   ctap_hid_cancel_clear();
   return 0;
 }
@@ -1357,7 +1386,6 @@ bool check_ble_timeout(void) {
 
 bool ble_u2f_check_device_status(void) {
   static bool processing = false;
-  uint8_t percent;
   if (processing) {
     return false;
   }
@@ -1372,24 +1400,12 @@ bool ble_u2f_check_device_status(void) {
     }
   }
 
-  if (!se_seed_cached) {
+  if (!se_fido_seed_is_ready()) {
     processing = true;
-    UI_WAIT_CALLBACK ui_callback = se_get_ui_callback();
-    while (1) {
-      usbPoll();
-      secbool ret = se_gen_root_node(&percent);
-      if (ret) {
-        if (percent == 100) {
-          se_seed_cached = true;
-          break;
-        } else if (ui_callback) {
-          ui_callback(_(C__PROCESSING_ETC), percent * 10);
-        }
-      } else {
-        send_u2f_error(U2F_SW_WRONG_DATA);
-        processing = false;
-        return false;
-      }
+    if (!check_se_fido_seed(NULL)) {
+      send_u2f_error(U2F_SW_WRONG_DATA);
+      processing = false;
+      return false;
     }
   }
   processing = false;
@@ -1612,7 +1628,8 @@ void u2f_authenticate_ble(const APDU *a) {
   uint8_t sig[64] = {0};
   resp->flags = a->p1 == U2F_AUTH_ENFORCE ? U2F_AUTH_FLAG_TUP : 0;
 #if EMULATOR
-  const uint32_t ctr = config_nextU2FCounter();
+  uint32_t ctr = 0;
+  (void)config_nextU2FCounter(&ctr);
   resp->ctr[0] = ctr >> 24 & 0xff;
   resp->ctr[1] = ctr >> 16 & 0xff;
   resp->ctr[2] = ctr >> 8 & 0xff;
