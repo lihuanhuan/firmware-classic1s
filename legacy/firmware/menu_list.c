@@ -694,6 +694,10 @@ static struct menu fido_switch_set_menu = {
 void menu_fido2_resident_credential(int index) {
   (void)index;
 
+  if (!check_se_fido_seed(NULL)) {
+    return;
+  }
+
   uint8_t indexs[FIDO2_RESIDENT_CREDENTIALS_COUNT] = {0};
   uint8_t count = 0;
   if (resident_credential_refresh) {

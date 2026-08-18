@@ -4236,13 +4236,18 @@ void signing_txack(TransactionType *tx) {
   signing_abort();
 }
 
-void signing_abort(void) {
-  if (signing) {
-    layoutHome();
-    signing = false;
-  }
+void signing_clear_runtime_state(void) {
+  signing = false;
   memzero(&root, sizeof(root));
   memzero(&node, sizeof(node));
+}
+
+void signing_abort(void) {
+  bool was_active = signing;
+  signing_clear_runtime_state();
+  if (was_active) {
+    layoutHome();
+  }
 }
 
 bool signing_is_preauthorized(void) {

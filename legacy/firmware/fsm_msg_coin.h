@@ -453,6 +453,7 @@ void fsm_msgVerifyMessage(const VerifyMessage *msg) {
 
 bool fsm_getOwnershipId(uint8_t *script_pubkey, size_t script_pubkey_size,
                         uint8_t ownership_id[OWNERSHIP_ID_SIZE]) {
+#if EMULATOR
   const char *OWNERSHIP_ID_KEY_PATH[] = {"SLIP-0019",
                                          "Ownership identification key"};
 
@@ -465,6 +466,14 @@ bool fsm_getOwnershipId(uint8_t *script_pubkey, size_t script_pubkey_size,
               script_pubkey_size, ownership_id);
 
   return true;
+#else
+  if (script_pubkey_size > UINT16_MAX) {
+    memzero(ownership_id, OWNERSHIP_ID_SIZE);
+    return false;
+  }
+  return se_slip21_ownership_id(script_pubkey, (uint16_t)script_pubkey_size,
+                                ownership_id) == sectrue;
+#endif
 }
 
 void fsm_msgGetOwnershipId(const GetOwnershipId *msg) {
@@ -595,8 +604,8 @@ void fsm_msgGetOwnershipProof(const GetOwnershipProof *msg) {
   if (msg->ownership_ids_count) {
     if (msg->ownership_ids_count != 1 ||
         msg->ownership_ids[0].size != sizeof(ownership_id) ||
-        memcmp(ownership_id, msg->ownership_ids[0].bytes,
-               sizeof(ownership_id)) != 0) {
+        !thd89_v2_constant_time_equal(ownership_id, msg->ownership_ids[0].bytes,
+                                      sizeof(ownership_id))) {
       fsm_sendFailure(FailureType_Failure_DataError,
                       "Invalid ownership identifier");
       layoutHome();
@@ -804,8 +813,6 @@ void fsm_msgUnlockPath(const UnlockPath *msg) {
 
   CHECK_PIN
 
-  const char *KEYCHAIN_MAC_KEY_PATH[] = {"TREZOR", "Keychain MAC key"};
-
   // UnlockPath is relevant only for SLIP-25 paths.
   // Note: Currently we only allow unlocking the entire SLIP-25 purpose subtree
   // instead of per-coin or per-account unlocking in order to avoid UI
@@ -816,6 +823,8 @@ void fsm_msgUnlockPath(const UnlockPath *msg) {
     return;
   }
 
+#if EMULATOR
+  const char *KEYCHAIN_MAC_KEY_PATH[] = {"TREZOR", "Keychain MAC key"};
   uint8_t keychain_mac_key[32] = {0};
   if (!fsm_getSlip21Key(KEYCHAIN_MAC_KEY_PATH, 2, keychain_mac_key)) {
     return;
@@ -828,6 +837,14 @@ void fsm_msgUnlockPath(const UnlockPath *msg) {
                        sizeof(uint32_t));
   }
   hmac_sha256_Final(&hctx, resp->mac.bytes);
+#else
+  if (!config_genSessionSeed()) {
+    return;
+  }
+  if (se_slip21_slip25_mac(resp->mac.bytes) != sectrue) {
+    return;
+  }
+#endif
 
   // Require confirmation to access SLIP25 paths unless already authorized.
   if (msg->has_mac) {

@@ -63,6 +63,7 @@
 #include "util.h"
 
 #include "se_chip.h"
+#include "se_thd89_v2.h"
 
 #if !BITCOIN_ONLY
 #include "ada.h"
@@ -274,8 +275,19 @@ void fsm_sendFailure(FailureType code, const char *text)
     protectAbortedByCancel = false;
   }
   if (protectAbortedByInitialize) {
-    fsm_msgInitialize((Initialize *)0);
+    Initialize pending_initialize;
+    const void *initialize_source = msg_tiny;
+    bool initialize_from_full_message =
+        msg_id_ready_to_process == MessageType_MessageType_Initialize;
+
+    if (initialize_from_full_message) {
+      initialize_source = get_incoming_message();
+      msg_id_ready_to_process = 0xFFFF;
+    }
+    memcpy(&pending_initialize, initialize_source, sizeof(pending_initialize));
     protectAbortedByInitialize = false;
+    fsm_msgInitialize(&pending_initialize);
+    memzero(&pending_initialize, sizeof(pending_initialize));
     return;
   }
   RESP_INIT(Failure);
@@ -399,9 +411,9 @@ HDNode *fsm_getDerivedNode(const char *curve, const uint32_t *address_n,
   return &node;
 }
 
+#if EMULATOR
 static bool fsm_getSlip21Key(const char *path[], size_t path_count,
                              uint8_t key[32]) {
-#if EMULATOR
   const uint8_t *seed = config_getSeed();
   if (seed == NULL) {
     return false;
@@ -413,19 +425,10 @@ static bool fsm_getSlip21Key(const char *path[], size_t path_count,
   }
   memcpy(key, slip21_key(&node), 32);
   memzero(&node, sizeof(node));
-#else
-  static CONFIDENTIAL Slip21Node node;
-  // slip21_from_seed(NULL, 0, &node);
-  se_slip21_node(node.data);
-  for (size_t i = 0; i < path_count; ++i) {
-    slip21_derive_path(&node, (uint8_t *)path[i], strlen(path[i]));
-  }
-  memcpy(key, slip21_key(&node), 32);
-  memzero(&node, sizeof(node));
-#endif
 
   return true;
 }
+#endif
 
 static bool fsm_layoutAddress(const char *address, const char *address_type,
                               const char *desc, bool ignorecase,
@@ -663,6 +666,20 @@ void fsm_abortWorkflows(void) {
   kaspa_signing_abort();
   stellar_signingAbort();
 #endif
+}
+
+void fsm_clear_runtime_state(void) {
+  reset_clear_runtime_state();
+  recovery_clear_runtime_state();
+  signing_clear_runtime_state();
+  authorization_type = 0;
+  unlock_path = 0;
+#if !BITCOIN_ONLY
+  ethereum_signing_clear_runtime_state();
+  kaspa_signing_clear_runtime_state();
+  stellar_signing_clear_runtime_state();
+#endif
+  fsm_clearCosiNonce();
 }
 
 void fsm_postMsgCleanup(MessageType message_type) {

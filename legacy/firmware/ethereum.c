@@ -990,14 +990,21 @@ void ethereum_signing_txack(const EthereumTxAck *tx) {
   }
 }
 
-void ethereum_signing_abort(void) {
+void ethereum_signing_clear_runtime_state(void) {
   if (ethereum_signing) {
     _node = NULL;
 #if EMULATOR
     memzero(privkey, sizeof(privkey));
 #endif
-    layoutHome();
     ethereum_signing = false;
+  }
+}
+
+void ethereum_signing_abort(void) {
+  bool was_active = ethereum_signing;
+  ethereum_signing_clear_runtime_state();
+  if (was_active) {
+    layoutHome();
   }
 }
 

@@ -477,6 +477,7 @@ void msg_read_tiny(const uint8_t *buf, uint32_t len) {
   }
 
   pb_istream_t stream = pb_istream_from_buffer(msg_tiny_raw, msg_size);
+  memzero(msg_tiny, sizeof(msg_tiny));
   bool status = pb_decode(&stream, fields, msg_tiny);
   if (status) {
     msg_tiny_id = msg_id;
