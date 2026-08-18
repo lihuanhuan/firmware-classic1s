@@ -1481,19 +1481,6 @@ bool config_getWhetherUseSE(void) { return g_bSelectSEFlag; }
 
 ExportType config_setSeedsExportFlag(ExportType flag) { return flag; }
 
-bool config_getMessageSE(BixinMessageSE_inputmessage_t *input_msg,
-                         BixinOutMessageSE_outmessage_t *get_msg) {
-  if (false == bMI2CDRV_SendData(input_msg->bytes, input_msg->size)) {
-    return false;
-  }
-  get_msg->size = 1024;
-  if (false == bMI2CDRV_ReceiveData(get_msg->bytes, &get_msg->size)) {
-    return false;
-  }
-  get_msg->bytes[get_msg->size] = '\0';
-  return true;
-}
-
 void config_setIsBixinAPP(void) { g_bIsBixinAPP = true; }
 
 void config_setSeSessionKey(uint8_t *data, uint32_t size) {

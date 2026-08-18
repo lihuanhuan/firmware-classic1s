@@ -40,7 +40,6 @@
 #include "layout2.h"
 #include "memory.h"
 #include "memzero.h"
-#include "mi2c.h"
 #include "protect.h"
 #include "rng.h"
 #include "se_chip.h"
@@ -741,19 +740,6 @@ void config_setWhetherUseSE(bool flag) {
 bool config_getWhetherUseSE(void) { return true; }
 
 ExportType config_setSeedsExportFlag(ExportType flag) { return flag; }
-
-bool config_getMessageSE(BixinMessageSE_inputmessage_t *input_msg,
-                         BixinOutMessageSE_outmessage_t *get_msg) {
-  if (false == bMI2CDRV_SendData(input_msg->bytes, input_msg->size)) {
-    return false;
-  }
-  get_msg->size = 1024;
-  if (false == bMI2CDRV_ReceiveData(get_msg->bytes, &get_msg->size)) {
-    return false;
-  }
-  get_msg->bytes[get_msg->size] = '\0';
-  return true;
-}
 
 void config_setIsBixinAPP(void) { g_bIsBixinAPP = true; }
 

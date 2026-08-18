@@ -210,8 +210,6 @@ void config_setBleTrans(bool mode);
 void config_setWhetherUseSE(bool flag);
 bool config_getWhetherUseSE(void);
 ExportType config_setSeedsExportFlag(ExportType flag);
-bool config_getMessageSE(BixinMessageSE_inputmessage_t *input_msg,
-                         BixinOutMessageSE_outmessage_t *get_msg);
 void config_setIsBixinAPP(void);
 
 void config_setSeSessionKey(uint8_t *data, uint32_t size);

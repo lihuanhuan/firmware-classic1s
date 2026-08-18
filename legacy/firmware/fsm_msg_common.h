@@ -22,7 +22,6 @@
 #include "flash.h"
 #include "hasher.h"
 #include "menu_list.h"
-#include "mi2c.h"
 #include "protect.h"
 #include "se_chip.h"
 #include "storage.h"
@@ -1096,20 +1095,6 @@ void fsm_msgBixinReboot(const BixinReboot *msg) {
   usbDisconnect();
   svc_reboot_to_bootloader();
 #endif
-}
-
-void fsm_msgBixinMessageSE(const BixinMessageSE *msg) {
-  RESP_INIT(BixinOutMessageSE);
-  if (false == config_getMessageSE(
-                   (BixinMessageSE_inputmessage_t *)(&msg->inputmessage),
-                   (BixinOutMessageSE_outmessage_t *)(&resp->outmessage))) {
-    fsm_sendFailure(FailureType_Failure_UnexpectedMessage, NULL);
-    layoutHome();
-    return;
-  }
-  resp->has_outmessage = true;
-  layoutHome();
-  return;
 }
 
 void fsm_msgBixinVerifyDeviceRequest(const BixinVerifyDeviceRequest *msg) {
